@@ -1,0 +1,17 @@
+[package]
+name = "multiseat-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Iced dashboard for RustMultiseat"
+
+[[bin]]
+name = "multiseat-gui"
+path = "src/main.rs"
+
+[dependencies]
+multiseat-core = { workspace = true }
+multiseat-daemon = { workspace = true }
+clap = { workspace = true }
+iced = { workspace = true }

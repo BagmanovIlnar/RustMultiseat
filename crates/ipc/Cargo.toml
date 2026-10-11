@@ -1,0 +1,14 @@
+[package]
+name = "multiseat-ipc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Length-prefixed IPC framing and codecs for RustMultiseat"
+
+[dependencies]
+multiseat-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }

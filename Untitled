@@ -1,0 +1,168 @@
+🏗 Архитектура проекта (Cargo Workspace)
+
+multiseat-os/
+├── Cargo.toml                  # Рабочее пространство
+├── core/                       # Модели данных, трейты, протокол IPC
+├── platform-windows/           # Обнаружение железа (DXGI, SetupAPI, CM API)
+├── daemon/                     # Фоновая служба (Tokio), управление драйверами, IPC-сервер
+├── gui/                        # Нативное GUI на Iced + Интеграция с системным треем
+└── drivers/                    # Исходный код WDF-драйверов ядра (Rust WDK)
+
+📋 Подробный технический план разработки (Windows + Iced)
+Этап 1: Моделирование данных и IPC в core
+Здесь мы описываем не только железо, но и протокол общения между GUI и Демоном, а также сообщения для архитектуры Elm (Iced).
+Модели железа (как в прошлом плане: GpuInfo, UsbTopology, UsbHub, SeatState).
+Протокол IPC (Inter-Process Communication):
+Используем Named Pipes (именованные каналы Windows) для максимальной скорости и низких задержек.
+Сериализация: bincode (бинарный, нулевые аллокации при десериализации, идеально для частых обновлений состояния).
+Запросы: GetHardwareTree, StartMultiseat, StopMultiseat, AssignDevice.
+Сообщения Iced (Elm Architecture):
+
+// core/src/messages.rs
+pub enum GuiMessage {
+    Tick, // Для опроса демона
+    HardwareUpdated(HardwareTree),
+    DeviceDroppedOnSeat { device_id: String, seat_id: u32 },
+    StartClicked,
+    StopClicked,
+    TrayIconClicked,
+}
+
+Этап 2: Модуль platform-windows (Обнаружение железа)
+Реализация нативного опроса системы. Работает внутри daemon, а в GUI передает только готовое дерево.
+GPU и видеовыходы: DXGI API (IDXGIFactory1, IDXGIAdapter, IDXGIOutput).
+USB-топология: Configuration Manager API (CM_Get_Parent, CM_Get_Child) + SetupAPI. Строим дерево: Корневой хаб -> Внешний хаб -> Порт -> Устройство.
+Мониторинг Hot-Plug: Подписка на WM_DEVICECHANGE внутри демона, чтобы мгновенно обновлять дерево при втыкании/вытыкании флешек или мышек.
+Этап 3: Ядерные драйверы (drivers/)
+Без изменений. Фильтры WDF на Rust (HID, USB, IddCx). Демон управляет ими через DeviceIoControl (IOCTL).
+Этап 4: Демон (Daemon) и Машина состояний
+Работает как Windows Service (или фоновый процесс с правами админа).
+Асинхронное ядро: tokio runtime.
+IPC Сервер: Слушает Named Pipe. Принимает команды от GUI, отправляет обратно обновления состояния (например, "устройство отключилось").
+Машина состояний:
+Idle: Железо обнаружено, GUI позволяет настраивать. Драйверы в пассивном режиме.
+Applying: GUI нажало "Start". Демон применяет правила к драйверам, создает сессии.
+Active: Разделение работает. Демон мониторит состояние и шлет апдейты в GUI.
+Этап 5: Графический интерфейс (Iced + System Tray)
+Самая важная часть обновления. Iced дает нативную отрисовку, но не имеет встроенного модуля для системного трея, поэтому мы используем связку.
+Стек технологий:
+Iced (ветка main или 0.12+) с рендерером wgpu для аппаратного ускорения UI.
+tray-icon (или muda + tao) для создания нативной иконки в трее Windows.
+Архитектура GUI (Elm):
+Model: Хранит состояние (дерево железа, конфигурацию мест, статус подключения к демону).
+Update: Обрабатывает GuiMessage. Если пришло DeviceDroppedOnSeat, отправляет IPC-запрос в Демон.
+View: Рендерит интерфейс.
+Интерфейс (Dashboard & Settings):
+Системный трей: Запускается в отдельном потоке. При клике на "Открыть" отправляет сообщение в основной цикл Iced, чтобы показать/сфокусировать главное окно.
+Drag-and-Drop: Iced поддерживает DnD. Левая панель (Дерево железа) делает элементы "перетаскиваемыми". Правая панель (Колонки рабочих мест) принимает их.
+Визуализация: Использование iced::widget::Scrollable для деревьев USB и iced::widget::Column/Row для сетки рабочих мест.
+Связь GUI и Daemon:
+В Iced есть механизм Subscription. Мы создаем подписку на Named Pipe, которая в фоне читает ответы от демона и конвертирует их в GuiMessage::HardwareUpdated.
+🔑 Ключевые технические вызовы и решения (Специфика Iced)
+
+Проблема
+Решение в архитектуре
+Два Event Loop (Iced + Трей)
+Iced блокирует поток в своем run(). Системный трей нужно запускать в отдельном потоке (std::thread::spawn), а для связи использовать iced::futures::channel::mpsc, чтобы события трея (клик по иконке) превращались в GuiMessage.
+Задержки при отрисовке больших деревьев USB
+Iced рендерит через WGPU. Если дерево USB огромное (50+ портов), нужно использовать iced::widget::Lazy или кэшировать вычисление View, чтобы не пересобирать UI при каждом тике.
+Блокировка UI при IPC
+Никогда не делать IPC-запросы синхронно внутри update(). Использовать Task::perform (или Command::perform в старых версиях), чтобы запрос в Демон ушел в фон, а UI сразу показал "Загрузка...", не фризясь.
+Тема и стилизация
+Iced из коробки имеет минималистичный вид. Для "дашборда" придется написать кастомные виджеты или использовать iced::widget::Container с кастомными стилями (через трейт container::StyleSheet), чтобы сделать колонки рабочих мест визуально похожими на "корзины" для дропа.
+
+🚀 Пошаговый план действий (Next Actions)
+Инициализация Workspace и Iced:
+Создать gui crate, добавить зависимости: iced (с фичами tokio, wgpu), tray-icon, bincode.
+Написать PoC: Окно Iced, которое сворачивается в трей по нажатию на крестик, и разворачивается по клику на иконку в трее.
+Прототип IPC (Named Pipes):
+Написать простой daemon (без железа), который просто отдает заглушку HardwareTree.
+Подключить Subscription в Iced, чтобы GUI обновляло текст на экране, получая данные от демона.
+Реализация Drag-and-Drop в Iced:
+Создать статичный список "Устройств" и две колонки "Seat 1" и "Seat 2".
+Реализовать логику перетаскивания (в Iced это делается через on_drag и on_drop у виджетов).
+Интеграция platform-windows:
+Написать код опроса GPU (DXGI) и USB (SetupAPI).
+Заставить daemon строить реальное дерево и отдавать его в GUI по IPC.
+Разработка WDF-драйвера (Rust WDK):
+Параллельно с UI начать писать простейший фильтр клавиатуры, чтобы к моменту готовности UI было куда "дропать" устройства.
+💡 Пример кода: Архитектура Iced (Model-Update-View)
+Чтобы вы почувствовали, как это будет выглядеть в коде, вот скелет главного файла GUI:
+
+// gui/src/main.rs
+use iced::widget::{column, row, text, button, scrollable};
+use iced::{Element, Task, Subscription, Theme};
+use tray_icon::TrayIconBuilder;
+
+// 1. Модель (Состояние)
+struct MultiseatApp {
+    hardware_tree: HardwareTree,
+    seats: Vec<Seat>,
+    is_connected_to_daemon: bool,
+    tray_sender: iced::futures::channel::mpsc::Sender<GuiMessage>,
+}
+
+// 2. Сообщения (События)
+enum GuiMessage {
+    Connected,
+    HardwareUpdated(HardwareTree),
+    DeviceDropped(String, usize), // device_id, seat_index
+    StartClicked,
+    StopClicked,
+    TrayEvent(TrayEvent),
+}
+
+impl MultiseatApp {
+    // 3. Точка входа
+    fn new() -> (Self, Task<GuiMessage>) {
+        // Запуск трея в отдельном потоке и создание канала связи
+        let (tx, rx) = iced::futures::channel::mpsc::channel(10);
+        std::thread::spawn(move || run_system_tray(tx));
+        
+        (Self { /* инициализация */ }, Task::none())
+    }
+
+    // 4. Обновление состояния
+    fn update(&mut self, message: GuiMessage) -> Task<GuiMessage> {
+        match message {
+            GuiMessage::StartClicked => {
+                // Асинхронный IPC запрос в Демон (не блокирует UI!)
+                Task::perform(send_ipc_start(), |_| GuiMessage::Connected)
+            }
+            GuiMessage::DeviceDropped(dev_id, seat_idx) => {
+                // Отправить команду привязки в Демон
+                Task::perform(assign_device(dev_id, seat_idx), |_| GuiMessage::Connected)
+            }
+            _ => Task::none(),
+        }
+    }
+
+    // 5. Подписки (Фоновые задачи)
+    fn subscription(&self) -> Subscription<GuiMessage> {
+        // Слушаем события из трея и из IPC канала демона
+        Subscription::run(ipc_listener)
+    }
+
+    // 6. Отрисовка (View)
+    fn view(&self) -> Element<GuiMessage> {
+        row![
+            // Левая панель: Дерево железа (Drag source)
+            scrollable(hardware_tree_view(&self.hardware_tree)).width(300),
+            
+            // Правая панель: Рабочие места (Drop targets)
+            row(
+                self.seats.iter().enumerate().map(|(i, seat)| {
+                    seat_view(seat, i) // Колонка с DnD зоной
+                })
+            ).spacing(10),
+        ].padding(10).into()
+    }
+}
+
+fn main() -> iced::Result {
+    iced::application("Multiseat OS", MultiseatApp::update, MultiseatApp::view)
+        .theme(Theme::Dark)
+        .run_with(MultiseatApp::new)
+}
+
+Этот план дает вам максимально производительное, нативное и безопасное приложение. Iced обеспечит плавность интерфейса (60/120 FPS), а Rust в ядре и демоне гарантирует отсутствие утечек памяти и падений.

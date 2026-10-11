@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/ipc",
+    "crates/platform-windows",
+    "crates/daemon",
+    "crates/session-agent",
+    "crates/gui",
+]
+default-members = [
+    "crates/core",
+    "crates/ipc",
+    "crates/daemon",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.99"
+authors = ["BagmanovIlnar"]
+repository = "https://github.com/BagmanovIlnar/RustMultiseat"
+
+[workspace.dependencies]
+multiseat-core = { path = "crates/core" }
+multiseat-ipc = { path = "crates/ipc" }
+multiseat-platform-windows = { path = "crates/platform-windows" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+tokio = { version = "1.44.2", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+clap = { version = "4.5.37", features = ["derive"] }
+bytes = "1.10.1"
+uuid = { version = "1.16.0", features = ["v4", "serde"] }
+iced = { version = "0.14.0", default-features = true }
+multiseat-daemon = { path = "crates/daemon" }
