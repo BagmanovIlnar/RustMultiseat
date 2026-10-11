@@ -7,6 +7,8 @@ mod dxgi;
 #[cfg(windows)]
 mod hotplug;
 #[cfg(windows)]
+mod hub_ioctl;
+#[cfg(windows)]
 mod setupapi_hid;
 
 #[cfg(windows)]

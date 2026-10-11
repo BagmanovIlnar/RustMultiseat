@@ -84,8 +84,11 @@ pub struct UsbNode {
     pub device_id: DeviceId,
     /// Human-readable description.
     pub description: String,
-    /// Hub port number when known.
+    /// Hub port number when known (prefer hub IOCTL over CM address guess).
     pub port: Option<u32>,
+    /// First CM/SetupAPI location path when known.
+    #[serde(default)]
+    pub location_path: Option<String>,
     /// Child nodes.
     pub children: Vec<UsbNode>,
 }

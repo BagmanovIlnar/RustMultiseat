@@ -33,6 +33,7 @@ pub fn enumerate_usb_roots() -> CoreResult<Vec<UsbNode>> {
             device_id: DeviceId::from_instance(row.instance_id),
             description: row.friendly_name,
             port: None,
+            location_path: None,
             children: Vec::new(),
         })
         .collect())

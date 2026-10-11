@@ -68,11 +68,13 @@ impl MockHardwareEnumerator {
                 device_id: DeviceId::from_instance("USB\\ROOT_HUB30\\1"),
                 description: "Root Hub".into(),
                 port: None,
+                location_path: Some("PCIROOT(0)#PCI(1400)#USBROOT(0)".into()),
                 children: vec![
                     UsbNode {
                         device_id: DeviceId::from_instance("USB\\VID_1A40&PID_0101\\HUB1"),
                         description: "External Hub".into(),
                         port: Some(1),
+                        location_path: Some("PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(1)".into()),
                         children: vec![
                             UsbNode {
                                 device_id: DeviceId::from_instance(
@@ -80,6 +82,7 @@ impl MockHardwareEnumerator {
                                 ),
                                 description: "Seat 1 Keyboard".into(),
                                 port: Some(1),
+                                location_path: None,
                                 children: vec![],
                             },
                             UsbNode {
@@ -88,6 +91,7 @@ impl MockHardwareEnumerator {
                                 ),
                                 description: "Seat 1 Pointer".into(),
                                 port: Some(2),
+                                location_path: None,
                                 children: vec![],
                             },
                         ],
@@ -96,6 +100,7 @@ impl MockHardwareEnumerator {
                         device_id: DeviceId::from_instance("USB\\VID_1A40&PID_0101\\HUB2"),
                         description: "External Hub 2".into(),
                         port: Some(2),
+                        location_path: Some("PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(2)".into()),
                         children: vec![
                             UsbNode {
                                 device_id: DeviceId::from_instance(
@@ -103,6 +108,7 @@ impl MockHardwareEnumerator {
                                 ),
                                 description: "Seat 2 Keyboard".into(),
                                 port: Some(1),
+                                location_path: None,
                                 children: vec![],
                             },
                             UsbNode {
@@ -111,6 +117,7 @@ impl MockHardwareEnumerator {
                                 ),
                                 description: "Seat 2 Pointer".into(),
                                 port: Some(2),
+                                location_path: None,
                                 children: vec![],
                             },
                         ],
