@@ -15,7 +15,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Debug, Parser)]
 #[command(name = "multiseat-daemon", about = "RustMultiseat mock daemon")]
 struct Args {
-    /// Bind address for the development TCP listener.
+    /// Bind endpoint: TCP `host:port` or Windows Named Pipe `\\.\pipe\Name`.
     #[arg(long, default_value = DEFAULT_BIND)]
     bind: String,
 

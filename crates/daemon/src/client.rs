@@ -1,9 +1,11 @@
-//! Shared framed TCP client used by CLI and integration tests.
+//! Shared framed IPC client used by CLI and integration tests.
 
 use bytes::BytesMut;
 use multiseat_core::{ClientRequest, ServerResponse, PROTOCOL_VERSION};
-use multiseat_ipc::{decode_frame, decode_payload, encode_frame, encode_payload, MessageKind};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use multiseat_ipc::{
+    decode_frame, decode_payload, encode_frame, encode_payload, is_named_pipe_path, MessageKind,
+};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 
@@ -24,16 +26,72 @@ pub enum ClientError {
     Timeout,
 }
 
-/// Framed TCP client with automatic Hello.
+enum ClientStream {
+    Tcp(TcpStream),
+    #[cfg(windows)]
+    Pipe(tokio::net::windows::named_pipe::NamedPipeClient),
+}
+
+impl AsyncRead for ClientStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Tcp(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            #[cfg(windows)]
+            Self::Pipe(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for ClientStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        match self.get_mut() {
+            Self::Tcp(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            #[cfg(windows)]
+            Self::Pipe(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match self.get_mut() {
+            Self::Tcp(s) => std::pin::Pin::new(s).poll_flush(cx),
+            #[cfg(windows)]
+            Self::Pipe(s) => std::pin::Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match self.get_mut() {
+            Self::Tcp(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            #[cfg(windows)]
+            Self::Pipe(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+/// Framed IPC client with automatic Hello.
 pub struct DaemonClient {
-    stream: TcpStream,
+    stream: ClientStream,
     next_id: u64,
 }
 
 impl DaemonClient {
-    /// Connects and completes protocol handshake.
+    /// Connects and completes protocol handshake (TCP or Named Pipe).
     pub async fn connect(addr: &str) -> Result<Self, ClientError> {
-        let stream = TcpStream::connect(addr).await?;
+        let stream = connect_stream(addr).await?;
         let mut client = Self { stream, next_id: 1 };
         let ack = client
             .request(&ClientRequest::Hello {
@@ -76,4 +134,24 @@ impl DaemonClient {
             Err(_) => Err(ClientError::Timeout),
         }
     }
+}
+
+async fn connect_stream(addr: &str) -> Result<ClientStream, ClientError> {
+    if is_named_pipe_path(addr) {
+        #[cfg(windows)]
+        {
+            use tokio::net::windows::named_pipe::ClientOptions;
+            let client = ClientOptions::new().open(addr)?;
+            return Ok(ClientStream::Pipe(client));
+        }
+        #[cfg(not(windows))]
+        {
+            return Err(ClientError::Io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Named Pipe client requires Windows",
+            )));
+        }
+    }
+    let stream = TcpStream::connect(addr).await?;
+    Ok(ClientStream::Tcp(stream))
 }

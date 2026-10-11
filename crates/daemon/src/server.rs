@@ -1,29 +1,50 @@
-//! Cross-platform TCP transport for the mock daemon.
+//! Daemon IPC listener: TCP (dev/CI) or Windows Named Pipe (production default).
 //!
-//! On Windows production builds this will be replaced/supplemented with a
-//! Named Pipe listener. The frame codec stays identical.
+//! Frame codec is identical on both transports.
 
 use std::sync::Arc;
 
 use bytes::BytesMut;
 use multiseat_core::{ClientRequest, DaemonEvent, ServerResponse};
 use multiseat_ipc::{
-    decode_frame, decode_payload, encode_frame, encode_payload, MessageKind, MAX_FRAME_PAYLOAD,
+    decode_frame, decode_payload, encode_frame, encode_payload, is_named_pipe_path, MessageKind,
+    MAX_FRAME_PAYLOAD,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
 use crate::handler::DaemonState;
 
-/// Default bind address for local development.
-pub const DEFAULT_BIND: &str = "127.0.0.1:17890";
+/// Default bind for CLI (`clap`); Windows → Named Pipe, elsewhere → TCP.
+#[cfg(windows)]
+pub const DEFAULT_BIND: &str = multiseat_ipc::WINDOWS_PIPE_NAME;
+/// Default bind for CLI (`clap`); Windows → Named Pipe, elsewhere → TCP.
+#[cfg(not(windows))]
+pub const DEFAULT_BIND: &str = multiseat_ipc::DEFAULT_TCP_ENDPOINT;
 
 /// Runs the accept loop until the process is cancelled.
 pub async fn run_server(bind: &str, state: Arc<DaemonState>) -> std::io::Result<()> {
+    if is_named_pipe_path(bind) {
+        #[cfg(windows)]
+        {
+            return run_named_pipe_server(bind, state).await;
+        }
+        #[cfg(not(windows))]
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Named Pipe listener requires Windows",
+            ));
+        }
+    }
+    run_tcp_server(bind, state).await
+}
+
+async fn run_tcp_server(bind: &str, state: Arc<DaemonState>) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
-    info!(%bind, "multiseat daemon listening");
+    info!(%bind, transport = "tcp", "multiseat daemon listening");
 
     loop {
         let (socket, peer) = listener.accept().await?;
@@ -37,7 +58,41 @@ pub async fn run_server(bind: &str, state: Arc<DaemonState>) -> std::io::Result<
     }
 }
 
-async fn handle_connection(mut socket: TcpStream, state: Arc<DaemonState>) -> std::io::Result<()> {
+#[cfg(windows)]
+async fn run_named_pipe_server(pipe_name: &str, state: Arc<DaemonState>) -> std::io::Result<()> {
+    use multiseat_ipc::transport::named_pipe::PipeAcl;
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    info!(%pipe_name, transport = "named_pipe", "multiseat daemon listening");
+
+    let mut first = true;
+    loop {
+        let mut acl = PipeAcl::local_daemon()?;
+        let attrs = acl.as_security_attributes_ptr();
+        let mut options = ServerOptions::new();
+        options.first_pipe_instance(first);
+        options.reject_remote_clients(true);
+        let server = unsafe { options.create_with_security_attributes_raw(pipe_name, attrs) }?;
+        // SECURITY_ATTRIBUTES only needed during CreateNamedPipe.
+        drop(acl);
+        first = false;
+
+        server.connect().await?;
+        info!(%pipe_name, "named pipe client connected");
+
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Err(err) = handle_connection(server, state).await {
+                warn!(error = %err, "named pipe session ended with error");
+            }
+        });
+    }
+}
+
+async fn handle_connection<S>(mut socket: S, state: Arc<DaemonState>) -> std::io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut buf = BytesMut::with_capacity(8 * 1024);
     let mut events = state.events.subscribe();
     let mut subscribed = false;
@@ -106,11 +161,14 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<DaemonState>) -> st
     }
 }
 
-async fn write_response(
-    socket: &mut TcpStream,
+async fn write_response<S>(
+    socket: &mut S,
     request_id: u64,
     response: &ServerResponse,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     let payload = encode_payload(response)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let mut out = BytesMut::new();
@@ -119,7 +177,10 @@ async fn write_response(
     socket.write_all(&out).await
 }
 
-async fn write_event(socket: &mut TcpStream, event: &DaemonEvent) -> std::io::Result<()> {
+async fn write_event<S>(socket: &mut S, event: &DaemonEvent) -> std::io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     let payload = encode_payload(event)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let mut out = BytesMut::new();

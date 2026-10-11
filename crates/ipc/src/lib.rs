@@ -18,4 +18,6 @@ pub use error::{FrameError, FrameResult};
 pub use frame::{
     decode_frame, encode_frame, FrameHeader, MessageKind, MAX_FRAME_PAYLOAD, MAX_QUEUE_DEPTH,
 };
-pub use transport::{Endpoint, DEFAULT_TCP_ENDPOINT, WINDOWS_PIPE_NAME};
+pub use transport::{
+    default_endpoint_str, is_named_pipe_path, Endpoint, DEFAULT_TCP_ENDPOINT, WINDOWS_PIPE_NAME,
+};
