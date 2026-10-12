@@ -8,6 +8,17 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
+#[cfg(windows)]
+mod scm;
+
+#[cfg(windows)]
+pub use scm::{
+    default_service_data_dir, ScmServiceHost, SERVICE_DISPLAY_NAME, SERVICE_NAME,
+};
+
+/// Named Pipe path advertised for local GUI/CLI clients (same as IPC default).
+pub const PIPE_NAME: &str = multiseat_ipc::WINDOWS_PIPE_NAME;
+
 /// Service control events that the host must honor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceControl {
@@ -126,16 +137,25 @@ impl WindowsServiceHost for ForegroundServiceHost {
     }
 }
 
-#[cfg(windows)]
-mod windows_scm {
-    //! Placeholder for future `windows-service` crate integration.
-    //!
-    //! Production path will register `service_main`, map STOP/SHUTDOWN to
-    //! [`super::ServiceControl`], and never show UI from Session 0.
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    /// Planned pipe name for local GUI/CLI clients.
-    pub const PIPE_NAME: &str = r"\\.\pipe\RustMultiseatDaemon";
+    #[test]
+    fn foreground_stop_triggers_shutdown_hook() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag2 = Arc::clone(&flag);
+        let mut host = ForegroundServiceHost::with_shutdown(move || {
+            flag2.store(true, Ordering::SeqCst);
+        });
+        host.handle_control(ServiceControl::Stop).unwrap();
+        assert!(host.should_stop());
+        host.shutdown().unwrap();
+        assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn pipe_name_matches_ipc_default() {
+        assert_eq!(PIPE_NAME, r"\\.\pipe\RustMultiseatDaemon");
+    }
 }
-
-#[cfg(windows)]
-pub use windows_scm::PIPE_NAME;

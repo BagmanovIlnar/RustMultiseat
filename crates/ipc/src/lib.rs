@@ -8,11 +8,17 @@
 
 #![deny(missing_docs)]
 
+mod auth;
+#[cfg(windows)]
+mod auth_windows;
 mod codec;
 mod error;
 mod frame;
 pub mod transport;
 
+pub use auth::{authorize, is_privileged_request, ClientIdentity, TransportKind};
+#[cfg(windows)]
+pub use auth_windows::identity_from_named_pipe;
 pub use codec::{decode_payload, encode_payload};
 pub use error::{FrameError, FrameResult};
 pub use frame::{

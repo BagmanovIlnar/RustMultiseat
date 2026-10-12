@@ -13,6 +13,8 @@ default-members = [
     "crates/ipc",
     "crates/daemon",
 ]
+# libFuzzer harness (nightly / cargo-fuzz); keep out of default `cargo test`.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

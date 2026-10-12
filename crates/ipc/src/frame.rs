@@ -179,17 +179,28 @@ mod tests {
 
     #[test]
     fn random_noise_never_panics() {
-        // Lightweight fuzz-style soak: decoder must stay panic-free.
+        // Lightweight fuzz-style soak (CI): decoder must stay panic-free.
+        // Heavier coverage: `fuzz/` libFuzzer target `decode_frame`.
         let mut seed = 0xC0FFEE_u64;
-        for _ in 0..256 {
+        for _ in 0..4_096 {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let len = ((seed >> 33) as usize % 64) + 1;
+            let len = ((seed >> 33) as usize % 128) + 1;
             let mut bytes = vec![0u8; len];
             for (i, b) in bytes.iter_mut().enumerate() {
                 *b = ((seed >> ((i % 8) * 8)) as u8).wrapping_add(i as u8);
             }
+            // Occasionally splice a plausible magic/header prefix.
+            if seed & 7 == 0 && bytes.len() >= HEADER_LEN {
+                bytes[..4].copy_from_slice(&PROTOCOL_MAGIC);
+                bytes[4..8].copy_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+            }
             let mut buf = BytesMut::from(bytes.as_slice());
-            let _ = decode_frame(&mut buf);
+            for _ in 0..8 {
+                match decode_frame(&mut buf) {
+                    Ok(Some(_)) => continue,
+                    Ok(None) | Err(_) => break,
+                }
+            }
         }
     }
 }

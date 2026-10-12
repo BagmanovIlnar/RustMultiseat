@@ -1,4 +1,8 @@
 /target/
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
 **/*.rs.bk
 .DS_Store
 *.pdb

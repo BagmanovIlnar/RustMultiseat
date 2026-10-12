@@ -16,4 +16,9 @@ pub use handler::DaemonState;
 pub use persist::{FileConfigStore, FileJournalStore};
 pub use sample_config::lab_sample_config;
 pub use server::{run_server, DEFAULT_BIND};
-pub use service::{ForegroundServiceHost, ServiceControl, WindowsServiceHost};
+pub use service::{ForegroundServiceHost, ServiceControl, WindowsServiceHost, PIPE_NAME};
+
+#[cfg(windows)]
+pub use service::{
+    default_service_data_dir, ScmServiceHost, SERVICE_DISPLAY_NAME, SERVICE_NAME,
+};

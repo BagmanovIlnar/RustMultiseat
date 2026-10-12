@@ -1,0 +1,25 @@
+[package]
+name = "multiseat-ipc-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "libFuzzer targets for multiseat-ipc (not part of the default workspace)"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1.10.1"
+multiseat-ipc = { path = "../crates/ipc" }
+
+[[bin]]
+name = "decode_frame"
+path = "fuzz_targets/decode_frame.rs"
+doc = false
+test = false
+bench = false
+
+[profile.release]
+debug = 1

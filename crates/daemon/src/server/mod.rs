@@ -1,14 +1,15 @@
 //! Daemon IPC listener: TCP (dev/CI) or Windows Named Pipe (production default).
 //!
-//! Frame codec is identical on both transports.
+//! Frame codec is identical on both transports. Privileged commands on Named
+//! Pipe require an Administrators or LocalSystem client token.
 
 use std::sync::Arc;
 
 use bytes::BytesMut;
-use multiseat_core::{ClientRequest, DaemonEvent, ServerResponse};
+use multiseat_core::{ClientRequest, DaemonEvent, ProtocolError, ServerResponse};
 use multiseat_ipc::{
-    decode_frame, decode_payload, encode_frame, encode_payload, is_named_pipe_path, MessageKind,
-    MAX_FRAME_PAYLOAD,
+    authorize, decode_frame, decode_payload, encode_frame, encode_payload, is_named_pipe_path,
+    is_privileged_request, ClientIdentity, MessageKind, MAX_FRAME_PAYLOAD,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -17,10 +18,13 @@ use tracing::{info, warn};
 
 use crate::handler::DaemonState;
 
+#[cfg(windows)]
+mod windows;
+
 /// Default bind for CLI (`clap`); Windows → Named Pipe, elsewhere → TCP.
 #[cfg(windows)]
 pub const DEFAULT_BIND: &str = multiseat_ipc::WINDOWS_PIPE_NAME;
-/// Default bind for CLI (`clap`); Windows → Named Pipe, elsewhere → TCP.
+/// Default bind for CLI (`clap`); TCP loopback on non-Windows hosts.
 #[cfg(not(windows))]
 pub const DEFAULT_BIND: &str = multiseat_ipc::DEFAULT_TCP_ENDPOINT;
 
@@ -29,7 +33,7 @@ pub async fn run_server(bind: &str, state: Arc<DaemonState>) -> std::io::Result<
     if is_named_pipe_path(bind) {
         #[cfg(windows)]
         {
-            return run_named_pipe_server(bind, state).await;
+            return windows::run_named_pipe_server(bind, state).await;
         }
         #[cfg(not(windows))]
         {
@@ -51,45 +55,22 @@ async fn run_tcp_server(bind: &str, state: Arc<DaemonState>) -> std::io::Result<
         info!(%peer, "client connected");
         let state = Arc::clone(&state);
         tokio::spawn(async move {
-            if let Err(err) = handle_connection(socket, state).await {
+            if let Err(err) =
+                handle_connection(socket, state, ClientIdentity::tcp_loopback(), None).await
+            {
                 warn!(error = %err, "client session ended with error");
             }
         });
     }
 }
 
-#[cfg(windows)]
-async fn run_named_pipe_server(pipe_name: &str, state: Arc<DaemonState>) -> std::io::Result<()> {
-    use multiseat_ipc::transport::named_pipe::PipeAcl;
-    use tokio::net::windows::named_pipe::ServerOptions;
-
-    info!(%pipe_name, transport = "named_pipe", "multiseat daemon listening");
-
-    let mut first = true;
-    loop {
-        let mut acl = PipeAcl::local_daemon()?;
-        let attrs = acl.as_security_attributes_ptr();
-        let mut options = ServerOptions::new();
-        options.first_pipe_instance(first);
-        options.reject_remote_clients(true);
-        let server = unsafe { options.create_with_security_attributes_raw(pipe_name, attrs) }?;
-        // SECURITY_ATTRIBUTES only needed during CreateNamedPipe.
-        drop(acl);
-        first = false;
-
-        server.connect().await?;
-        info!(%pipe_name, "named pipe client connected");
-
-        let state = Arc::clone(&state);
-        tokio::spawn(async move {
-            if let Err(err) = handle_connection(server, state).await {
-                warn!(error = %err, "named pipe session ended with error");
-            }
-        });
-    }
-}
-
-async fn handle_connection<S>(mut socket: S, state: Arc<DaemonState>) -> std::io::Result<()>
+/// Serves one framed client connection (TCP or Named Pipe stream).
+pub(crate) async fn handle_connection<S>(
+    mut socket: S,
+    state: Arc<DaemonState>,
+    mut identity: ClientIdentity,
+    pipe_handle: Option<isize>,
+) -> std::io::Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -122,7 +103,7 @@ where
                                 Ok(v) => v,
                                 Err(err) => {
                                     let resp = ServerResponse::Err(
-                                        multiseat_core::ProtocolError::CorruptPayload {
+                                        ProtocolError::CorruptPayload {
                                             message: err.to_string(),
                                         },
                                     );
@@ -130,6 +111,23 @@ where
                                     continue;
                                 }
                             };
+
+                            refresh_identity(&mut identity, pipe_handle, &request);
+
+                            if let Err(err) = authorize(&identity, &request) {
+                                warn!(
+                                    sid = ?identity.sid,
+                                    privileged = is_privileged_request(&request),
+                                    "IPC authorization denied"
+                                );
+                                write_response(
+                                    &mut socket,
+                                    frame.request_id,
+                                    &ServerResponse::Err(err),
+                                )
+                                .await?;
+                                continue;
+                            }
 
                             if matches!(request, ClientRequest::Subscribe) {
                                 subscribed = true;
@@ -158,6 +156,25 @@ where
                 }
             }
         }
+    }
+}
+
+fn refresh_identity(
+    identity: &mut ClientIdentity,
+    pipe_handle: Option<isize>,
+    request: &ClientRequest,
+) {
+    #[cfg(windows)]
+    {
+        if is_privileged_request(request) {
+            if let Some(raw) = pipe_handle {
+                *identity = windows::resolve_pipe_identity(raw);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (identity, pipe_handle, request);
     }
 }
 
