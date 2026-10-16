@@ -36,6 +36,25 @@ pub enum ClientRequest {
     Subscribe,
     /// Acknowledge emergency fail-open and clear the alert.
     AcknowledgeEmergency,
+    /// Session agent registers for a seat (after protocol Hello).
+    AgentHello {
+        /// Seat this agent serves.
+        seat_id: SeatId,
+        /// Agent binary protocol/capability version.
+        agent_version: u32,
+    },
+    /// Session agent liveness pulse.
+    AgentHeartbeat {
+        /// Seat this agent serves.
+        seat_id: SeatId,
+    },
+    /// Agent requests host fail-open (crash path / local emergency).
+    AgentFailOpen {
+        /// Seat that initiated fail-open.
+        seat_id: SeatId,
+        /// Human-readable reason.
+        reason: String,
+    },
 }
 
 /// Daemon → client reply correlated with a request.
@@ -59,6 +78,13 @@ pub enum ServerResponse {
     Validation(ValidationReport),
     /// Stage 0 feasibility checklist.
     Feasibility(FeasibilityReport),
+    /// Agent registration accepted.
+    AgentAck {
+        /// Seat the agent is bound to.
+        seat_id: SeatId,
+        /// Suggested heartbeat period in milliseconds.
+        heartbeat_interval_ms: u64,
+    },
     /// Generic success.
     Ok,
     /// Typed protocol/application error.
@@ -98,6 +124,34 @@ pub enum DaemonEvent {
         /// Reason for fail-open.
         reason: String,
     },
+    /// Session agent connected and registered.
+    AgentOnline {
+        /// Seat the agent serves.
+        seat_id: SeatId,
+    },
+    /// Session agent went offline or timed out (heartbeat miss / FailOpen).
+    AgentOffline {
+        /// Seat the agent served.
+        seat_id: SeatId,
+        /// Why the agent is considered offline.
+        reason: String,
+    },
+}
+
+#[cfg(test)]
+mod daemon_event_tests {
+    use super::*;
+
+    #[test]
+    fn agent_online_offline_variants_construct() {
+        let online = DaemonEvent::AgentOnline { seat_id: SeatId(1) };
+        let offline = DaemonEvent::AgentOffline {
+            seat_id: SeatId(1),
+            reason: "heartbeat timeout".into(),
+        };
+        assert!(matches!(online, DaemonEvent::AgentOnline { .. }));
+        assert!(matches!(offline, DaemonEvent::AgentOffline { .. }));
+    }
 }
 
 /// Protocol and authorization failures.

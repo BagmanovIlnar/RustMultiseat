@@ -2,6 +2,7 @@
 
 #![deny(missing_docs)]
 
+pub mod agents;
 pub mod client;
 pub mod client_sync;
 pub mod handler;
@@ -10,6 +11,7 @@ pub mod sample_config;
 pub mod server;
 pub mod service;
 
+pub use agents::{AgentRegistry, DEFAULT_AGENT_TIMEOUT, DEFAULT_HEARTBEAT_INTERVAL};
 pub use client::DaemonClient;
 pub use client_sync::DaemonClientSync;
 pub use handler::DaemonState;

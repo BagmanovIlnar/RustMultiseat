@@ -2,10 +2,12 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use multiseat_core::{
     ClientRequest, CoreError, DaemonEvent, FeasibilityReport, HardwareEnumerator, JournalStore,
-    MultiseatConfig, ProtocolError, SeatOrchestrator, SeatState, ServerResponse, PROTOCOL_VERSION,
+    MultiseatConfig, ProtocolError, SeatId, SeatOrchestrator, SeatState, ServerResponse,
+    PROTOCOL_VERSION,
 };
 use multiseat_core::InputDeviceKind;
 use multiseat_platform_windows::{
@@ -15,6 +17,7 @@ use multiseat_platform_windows::{
 use tokio::sync::{broadcast, Mutex};
 use tracing::{info, warn};
 
+use crate::agents::AgentRegistry;
 use crate::persist::{FileConfigStore, FileJournalStore};
 
 type HostOrchestrator = SeatOrchestrator<
@@ -30,6 +33,8 @@ pub struct DaemonState {
     pub orchestrator: Mutex<HostOrchestrator>,
     /// Broadcast channel for push events.
     pub events: broadcast::Sender<DaemonEvent>,
+    /// Live session-agent heartbeats.
+    pub agents: Mutex<AgentRegistry>,
     /// Durable journal path store.
     journal_store: FileJournalStore,
     /// Durable saved configuration.
@@ -133,11 +138,52 @@ impl DaemonState {
         let state = Arc::new(Self {
             orchestrator: Mutex::new(orchestrator),
             events,
+            agents: Mutex::new(AgentRegistry::new()),
             journal_store,
             config_store,
         });
         Self::spawn_hotplug_poller(Arc::clone(&state));
+        Self::spawn_agent_watchdog(Arc::clone(&state));
         state
+    }
+
+    fn spawn_agent_watchdog(state: Arc<Self>) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(500));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let dead = {
+                    let mut agents = state.agents.lock().await;
+                    agents.reap_timed_out(Instant::now())
+                };
+                for seat_id in dead {
+                    warn!(%seat_id, "session agent heartbeat timed out; fail-open");
+                    let _ = state.events.send(DaemonEvent::AgentOffline {
+                        seat_id,
+                        reason: "heartbeat timeout".into(),
+                    });
+                    let _ = state.events.send(DaemonEvent::EmergencyFailOpen {
+                        reason: format!("agent {seat_id} heartbeat timeout"),
+                    });
+                    let mut orch = state.orchestrator.lock().await;
+                    if matches!(orch.state(), SeatState::Active | SeatState::Degraded { .. }) {
+                        if let Err(err) = orch.stop() {
+                            warn!(error = %err, "fail-open stop after agent timeout failed");
+                        } else {
+                            let _ = state.sync_journal(&orch);
+                            let _ = state.events.send(DaemonEvent::SeatStateChanged {
+                                seat_id: Some(seat_id),
+                                state: SeatState::Idle,
+                            });
+                        }
+                    }
+                }
+            }
+        });
     }
 
     fn spawn_hotplug_poller(state: Arc<Self>) {
@@ -269,6 +315,71 @@ impl DaemonState {
                 });
                 ServerResponse::Ok
             }
+            ClientRequest::AgentHello {
+                seat_id,
+                agent_version,
+            } => self.agent_hello(seat_id, agent_version).await,
+            ClientRequest::AgentHeartbeat { seat_id } => self.agent_heartbeat(seat_id).await,
+            ClientRequest::AgentFailOpen { seat_id, reason } => {
+                self.agent_fail_open(seat_id, reason).await
+            }
+        }
+    }
+
+    async fn agent_hello(&self, seat_id: SeatId, agent_version: u32) -> ServerResponse {
+        let interval_ms = {
+            let mut agents = self.agents.lock().await;
+            agents.register(seat_id, agent_version, Instant::now());
+            agents.heartbeat_interval_ms()
+        };
+        info!(%seat_id, agent_version, "session agent online");
+        let _ = self.events.send(DaemonEvent::AgentOnline { seat_id });
+        ServerResponse::AgentAck {
+            seat_id,
+            heartbeat_interval_ms: interval_ms,
+        }
+    }
+
+    async fn agent_heartbeat(&self, seat_id: SeatId) -> ServerResponse {
+        let ok = {
+            let mut agents = self.agents.lock().await;
+            agents.heartbeat(seat_id, Instant::now())
+        };
+        if ok {
+            ServerResponse::Ok
+        } else {
+            ServerResponse::Err(ProtocolError::InvalidCommand {
+                message: format!("agent for {seat_id} is not registered; send AgentHello first"),
+            })
+        }
+    }
+
+    async fn agent_fail_open(&self, seat_id: SeatId, reason: String) -> ServerResponse {
+        {
+            let mut agents = self.agents.lock().await;
+            let _ = agents.remove(seat_id);
+        }
+        warn!(%seat_id, %reason, "session agent requested fail-open");
+        let _ = self.events.send(DaemonEvent::AgentOffline {
+            seat_id,
+            reason: reason.clone(),
+        });
+        let _ = self.events.send(DaemonEvent::EmergencyFailOpen {
+            reason: format!("agent {seat_id}: {reason}"),
+        });
+        let mut orch = self.orchestrator.lock().await;
+        match orch.stop() {
+            Ok(()) => {
+                let _ = self.sync_journal(&orch);
+                let _ = self.events.send(DaemonEvent::SeatStateChanged {
+                    seat_id: Some(seat_id),
+                    state: SeatState::Idle,
+                });
+                ServerResponse::Ok
+            }
+            Err(err) => ServerResponse::Err(ProtocolError::Application {
+                message: err.to_string(),
+            }),
         }
     }
 

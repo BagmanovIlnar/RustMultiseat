@@ -1894,8 +1894,11 @@ name = "multiseat-session-agent"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "multiseat-core",
+ "multiseat-daemon",
  "multiseat-platform-windows",
  "serde_json",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

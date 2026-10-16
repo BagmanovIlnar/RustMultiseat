@@ -3,7 +3,7 @@
 use std::net::TcpListener;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use multiseat_core::{ClientRequest, SeatState, ServerResponse};
+use multiseat_core::{ClientRequest, SeatId, SeatState, ServerResponse};
 use multiseat_daemon::{lab_sample_config, run_server, DaemonClient, DaemonState};
 use tokio::time::{sleep, Duration};
 
@@ -179,6 +179,76 @@ async fn feasibility_report_is_no_go_until_session_poc() {
         }
         other => panic!("unexpected {other:?}"),
     }
+    server.abort();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn session_agent_hello_heartbeat_and_fail_open() {
+    let addr = free_addr();
+    let data_dir = unique_data_dir("agent");
+    let state = DaemonState::mock_with_data_dir(&data_dir);
+    let bind = addr.clone();
+    let server = tokio::spawn(async move { run_server(&bind, state).await });
+
+    let mut client = None;
+    for _ in 0..50 {
+        match DaemonClient::connect(&addr).await {
+            Ok(c) => {
+                client = Some(c);
+                break;
+            }
+            Err(_) => sleep(Duration::from_millis(20)).await,
+        }
+    }
+    let mut client = client.expect("connect");
+
+    let hello = client
+        .request(&ClientRequest::AgentHello {
+            seat_id: SeatId(1),
+            agent_version: 1,
+        })
+        .await
+        .unwrap();
+    match hello {
+        ServerResponse::AgentAck {
+            seat_id,
+            heartbeat_interval_ms,
+        } => {
+            assert_eq!(seat_id, SeatId(1));
+            assert!(heartbeat_interval_ms >= 200);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    let beat = client
+        .request(&ClientRequest::AgentHeartbeat {
+            seat_id: SeatId(1),
+        })
+        .await
+        .unwrap();
+    assert_eq!(beat, ServerResponse::Ok);
+
+    let _ = client
+        .request(&ClientRequest::Start(lab_sample_config()))
+        .await
+        .unwrap();
+
+    let fail = client
+        .request(&ClientRequest::AgentFailOpen {
+            seat_id: SeatId(1),
+            reason: "test".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(fail, ServerResponse::Ok);
+
+    let snapshot = client.request(&ClientRequest::GetSnapshot).await.unwrap();
+    match snapshot {
+        ServerResponse::Snapshot { state, .. } => assert_eq!(state, SeatState::Idle),
+        other => panic!("unexpected {other:?}"),
+    }
+
     server.abort();
     let _ = std::fs::remove_dir_all(data_dir);
 }

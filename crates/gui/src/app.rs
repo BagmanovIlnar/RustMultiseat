@@ -379,6 +379,15 @@ impl MultiseatApp {
                 self.status = format!("Feasibility go={} · {}", report.go, report.summary);
                 self.last_feasibility = Some(report);
             }
+            ServerResponse::AgentAck {
+                seat_id,
+                heartbeat_interval_ms,
+            } => {
+                self.connected = true;
+                self.status = format!(
+                    "Agent ack seat={seat_id} heartbeat={heartbeat_interval_ms}ms"
+                );
+            }
             ServerResponse::Ok => {
                 self.connected = true;
                 self.status = "OK".into();
