@@ -1,5 +1,6 @@
 //! Stage 0 dual-session probe and native [`SessionBackend`].
 
+mod agent_launch;
 mod backend;
 mod host;
 
@@ -11,6 +12,10 @@ mod stub;
 
 use multiseat_core::DualSessionProbeResult;
 
+pub use agent_launch::{
+    agent_args, require_agent, resolve_agent_binary, spawn_session_agent, spawn_session_agent_at,
+    stop_agent_child, AGENT_BIN_ENV, REQUIRE_AGENT_ENV,
+};
 pub use backend::WindowsSessionBackend;
 pub use host::HostSessionBackend;
 

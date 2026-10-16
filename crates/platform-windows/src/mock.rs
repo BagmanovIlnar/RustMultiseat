@@ -1,6 +1,7 @@
 //! Deterministic mock backends for daemon/CLI development and tests.
 
 use std::collections::HashMap;
+use std::process::Child;
 use std::sync::Arc;
 
 use multiseat_core::{
@@ -9,8 +10,10 @@ use multiseat_core::{
     InputDeviceKind, InputRouter, PlatformCapabilities, RollbackToken, SeatConfig, SeatId,
     SessionBackend, SessionHandle, SessionId, UsbNode,
 };
+use tracing::{info, warn};
 
 use crate::debounce::DebounceGate;
+use crate::session::{require_agent, spawn_session_agent, stop_agent_child};
 
 /// In-memory hardware enumerator with a fixed lab topology.
 #[derive(Debug, Clone)]
@@ -206,12 +209,38 @@ impl HardwareEnumerator for MockHardwareEnumerator {
 }
 
 /// Mock session backend that allocates monotonic session ids.
-#[derive(Debug, Default)]
+///
+/// [`SessionBackend::start_agent`] tries to spawn `multiseat-session-agent`.
+/// If the binary is missing and `MULTISEAT_REQUIRE_AGENT` is unset, the start
+/// still succeeds so CI/orchestrator tests remain usable.
 pub struct MockSessionBackend {
     next_id: u32,
     sessions: HashMap<SeatId, SessionId>,
+    agents: HashMap<SeatId, Child>,
     /// When true, [`SessionBackend::probe`] returns false.
     pub probe_ok: bool,
+}
+
+impl std::fmt::Debug for MockSessionBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MockSessionBackend")
+            .field("next_id", &self.next_id)
+            .field("sessions", &self.sessions)
+            .field("agents", &self.agents.len())
+            .field("probe_ok", &self.probe_ok)
+            .finish()
+    }
+}
+
+impl Default for MockSessionBackend {
+    fn default() -> Self {
+        Self {
+            next_id: 10,
+            sessions: HashMap::new(),
+            agents: HashMap::new(),
+            probe_ok: false,
+        }
+    }
 }
 
 impl MockSessionBackend {
@@ -220,7 +249,21 @@ impl MockSessionBackend {
         Self {
             next_id: 10,
             sessions: HashMap::new(),
+            agents: HashMap::new(),
             probe_ok: true,
+        }
+    }
+
+    /// Number of tracked agent child processes (tests).
+    pub fn agent_count(&self) -> usize {
+        self.agents.len()
+    }
+}
+
+impl Drop for MockSessionBackend {
+    fn drop(&mut self) {
+        for (_, mut child) in self.agents.drain() {
+            stop_agent_child(&mut child);
         }
     }
 }
@@ -247,7 +290,30 @@ impl SessionBackend for MockSessionBackend {
         if !self.sessions.contains_key(&session.seat_id) {
             return Err(CoreError::Backend("unknown session".into()));
         }
-        Ok(())
+        if let Some(mut prev) = self.agents.remove(&session.seat_id) {
+            stop_agent_child(&mut prev);
+        }
+
+        match spawn_session_agent(session.seat_id, None) {
+            Ok(child) => {
+                info!(
+                    seat = %session.seat_id,
+                    pid = child.id(),
+                    "mock session-agent spawned"
+                );
+                self.agents.insert(session.seat_id, child);
+                Ok(())
+            }
+            Err(err) if !require_agent() => {
+                warn!(
+                    seat = %session.seat_id,
+                    error = %err,
+                    "mock start_agent: binary unavailable; continuing without child (set MULTISEAT_REQUIRE_AGENT=1 to fail)"
+                );
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     fn lock(&mut self, _session: &SessionHandle) -> CoreResult<()> {
@@ -255,6 +321,9 @@ impl SessionBackend for MockSessionBackend {
     }
 
     fn disconnect(&mut self, session: &SessionHandle) -> CoreResult<()> {
+        if let Some(mut child) = self.agents.remove(&session.seat_id) {
+            stop_agent_child(&mut child);
+        }
         self.sessions.remove(&session.seat_id);
         Ok(())
     }
@@ -265,6 +334,43 @@ impl SessionBackend for MockSessionBackend {
         } else {
             Ok(BackendHealth::down("session missing"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use multiseat_core::SeatConfig;
+
+    fn sample_seat() -> SeatConfig {
+        SeatConfig {
+            id: SeatId(1),
+            user_sid: multiseat_core::UserSid("S-1-5-21-1".into()),
+            display_ids: vec![],
+            keyboard_ids: vec![],
+            pointer_ids: vec![],
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn start_agent_soft_ok_without_binary() {
+        let mut backend = MockSessionBackend::available();
+        let session = backend.create_or_connect(&sample_seat()).unwrap();
+        // PATH name fallback usually cannot spawn in CI → soft Ok unless REQUIRE set.
+        backend.start_agent(&session).unwrap();
+        backend.disconnect(&session).unwrap();
+        assert_eq!(backend.agent_count(), 0);
+    }
+
+    #[test]
+    fn start_agent_unknown_session_errs() {
+        let mut backend = MockSessionBackend::available();
+        let session = SessionHandle {
+            seat_id: SeatId(99),
+            session_id: SessionId(1),
+        };
+        assert!(backend.start_agent(&session).is_err());
     }
 }
 

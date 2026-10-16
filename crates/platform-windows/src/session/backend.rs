@@ -109,15 +109,16 @@ impl SessionBackend for WindowsSessionBackend {
         if !self.seats.contains_key(&session.seat_id) {
             return Err(CoreError::Backend("unknown session".into()));
         }
-        // Agent launch across sessions needs CreateProcessAsUser / service rights;
-        // keep honest until Stage 0 defines a licensed path.
+        // Cross-session launch needs CreateProcessAsUser with the target session
+        // token. Mock backends spawn in-process for heartbeat lab; native stays
+        // honest until that Stage 0 path is proven.
         warn!(
             seat = %session.seat_id,
             session = session.session_id.0,
-            "start_agent not implemented for native WindowsSessionBackend"
+            "native start_agent refused (CreateProcessAsUser / least-privilege token path pending)"
         );
         Err(CoreError::Backend(
-            "native start_agent not implemented (awaiting Stage 0 licensed session-agent launch path)"
+            "native start_agent not implemented (need CreateProcessAsUser into target WTS session; use mock backend or MULTISEAT_USE_MOCK=1 for same-session spawn)"
                 .into(),
         ))
     }

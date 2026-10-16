@@ -21,4 +21,7 @@ pub use input::{probe_input, HostInputRouter, WindowsInputRouter};
 pub use inventory::{prefer_native, probe_capabilities, WindowsHardwareEnumerator};
 pub use mock::{MockDisplayBackend, MockHardwareEnumerator, MockInputRouter, MockSessionBackend};
 pub use probe::detect_capabilities;
-pub use session::{probe_dual_sessions, HostSessionBackend, WindowsSessionBackend};
+pub use session::{
+    agent_args, probe_dual_sessions, resolve_agent_binary, spawn_session_agent, HostSessionBackend,
+    WindowsSessionBackend, AGENT_BIN_ENV, REQUIRE_AGENT_ENV,
+};
