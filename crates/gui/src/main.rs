@@ -1,18 +1,20 @@
 //! Minimal Iced dashboard for RustMultiseat.
 //!
-//! Stage 6 slice: live IPC to the daemon — inventory, validation, Stage 0
-//! feasibility, start/stop. Custom DnD and tray land in a later iteration.
+//! Stage 6: live IPC, click-DnD seat assignment with local validation preview,
+//! Validate/Start/Save against the draft. Tray lands later.
 
 mod app;
+mod assignment;
 mod config_choice;
 mod ipc;
 mod panels;
 
 use clap::Parser;
-use multiseat_core::ServerResponse;
+use multiseat_core::{DeviceId, DisplayId, SeatId, ServerResponse};
 use multiseat_daemon::DEFAULT_BIND;
 
 use app::MultiseatApp;
+use assignment::Assignable;
 
 #[derive(Debug, Parser)]
 #[command(name = "multiseat-gui")]
@@ -31,16 +33,40 @@ pub enum Message {
     TickRefresh,
     /// Fetch Stage 0 feasibility report.
     Feasibility,
-    /// Validate saved config (or lab sample if empty).
+    /// Validate draft (daemon).
     Validate,
-    /// Persist the built-in lab sample config on the daemon.
-    SaveSample,
-    /// Start multiseat with saved/lab config.
+    /// Persist draft config on the daemon.
+    SaveDraft,
+    /// Start multiseat with draft/saved/lab config.
     Start,
     /// Stop multiseat / fail-open.
     Stop,
     /// Acknowledge emergency fail-open alert.
     AckEmergency,
+    /// Pick a hardware item (drag start).
+    DragStarted(Assignable),
+    /// Cancel current pick.
+    CancelDrag,
+    /// Drop picked item onto a seat.
+    DroppedOnSeat(SeatId),
+    /// Drop picked item onto host emergency slots.
+    DroppedOnEmergency,
+    /// Append an empty seat to the draft.
+    AddSeat,
+    /// Replace draft with lab sample config.
+    LoadSampleDraft,
+    /// Reset draft from last saved snapshot.
+    ResetDraft,
+    /// Clear one display from a seat.
+    ClearSeatDisplay(SeatId, DisplayId),
+    /// Clear one keyboard from a seat.
+    ClearSeatKeyboard(SeatId, DeviceId),
+    /// Clear one pointer from a seat.
+    ClearSeatPointer(SeatId, DeviceId),
+    /// Clear emergency keyboard.
+    ClearEmergencyKeyboard,
+    /// Clear emergency pointer.
+    ClearEmergencyPointer,
     /// Result of a background daemon RPC.
     DaemonResult(Result<ServerResponse, String>),
 }

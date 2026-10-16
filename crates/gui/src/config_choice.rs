@@ -1,4 +1,4 @@
-//! Picks which [`MultiseatConfig`] the dashboard should send for validate/start.
+//! Picks which [`MultiseatConfig`] the dashboard should send for validate/start/save.
 
 use multiseat_core::MultiseatConfig;
 use multiseat_daemon::lab_sample_config;
@@ -6,6 +6,8 @@ use multiseat_daemon::lab_sample_config;
 /// Source of the config used for a mutating GUI action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigSource {
+    /// Local draft edited via assignment UI.
+    Draft,
     /// Daemon-saved config from the last snapshot.
     Saved,
     /// Built-in one-seat lab sample (mock inventory).
@@ -14,13 +16,20 @@ pub enum ConfigSource {
 
 /// Returns the config to send and where it came from.
 ///
-/// Prefer the saved snapshot config when it has at least one seat; otherwise
-/// fall back to the lab sample so Validate/Start stay usable against mock backends.
-pub fn config_for_action(saved: &MultiseatConfig) -> (MultiseatConfig, ConfigSource) {
-    if saved.seats.is_empty() {
-        (lab_sample_config(), ConfigSource::LabSample)
-    } else {
+/// Prefer a non-empty draft; else saved snapshot seats; else lab sample.
+pub fn config_for_action(
+    draft: &MultiseatConfig,
+    saved: &MultiseatConfig,
+) -> (MultiseatConfig, ConfigSource) {
+    if !draft.seats.is_empty()
+        || draft.emergency_keyboard.is_some()
+        || draft.emergency_pointer.is_some()
+    {
+        (draft.clone(), ConfigSource::Draft)
+    } else if !saved.seats.is_empty() {
         (saved.clone(), ConfigSource::Saved)
+    } else {
+        (lab_sample_config(), ConfigSource::LabSample)
     }
 }
 
@@ -29,18 +38,10 @@ mod tests {
     use super::*;
     use multiseat_core::{SeatConfig, SeatId, UserSid};
 
-    #[test]
-    fn empty_saved_uses_lab_sample() {
-        let (cfg, src) = config_for_action(&MultiseatConfig::default());
-        assert_eq!(src, ConfigSource::LabSample);
-        assert!(!cfg.seats.is_empty());
-    }
-
-    #[test]
-    fn non_empty_saved_is_preferred() {
-        let saved = MultiseatConfig {
+    fn one_seat(id: u32) -> MultiseatConfig {
+        MultiseatConfig {
             seats: vec![SeatConfig {
-                id: SeatId(9),
+                id: SeatId(id),
                 user_sid: UserSid("S-1-5-21-1".into()),
                 display_ids: vec![],
                 keyboard_ids: vec![],
@@ -49,8 +50,29 @@ mod tests {
             }],
             emergency_keyboard: None,
             emergency_pointer: None,
-        };
-        let (cfg, src) = config_for_action(&saved);
+        }
+    }
+
+    #[test]
+    fn draft_wins_when_present() {
+        let draft = one_seat(3);
+        let saved = one_seat(9);
+        let (cfg, src) = config_for_action(&draft, &saved);
+        assert_eq!(src, ConfigSource::Draft);
+        assert_eq!(cfg.seats[0].id, SeatId(3));
+    }
+
+    #[test]
+    fn empty_everything_uses_lab_sample() {
+        let (cfg, src) = config_for_action(&MultiseatConfig::default(), &MultiseatConfig::default());
+        assert_eq!(src, ConfigSource::LabSample);
+        assert!(!cfg.seats.is_empty());
+    }
+
+    #[test]
+    fn saved_used_when_draft_empty() {
+        let saved = one_seat(9);
+        let (cfg, src) = config_for_action(&MultiseatConfig::default(), &saved);
         assert_eq!(src, ConfigSource::Saved);
         assert_eq!(cfg.seats[0].id, SeatId(9));
     }

@@ -40,4 +40,6 @@ pub use traits::{
     BackendHealth, DisplayBackend, DisplayCapabilities, HardwareEnumerator, InputAssignments,
     InputRouter, SessionBackend, SessionHandle,
 };
-pub use validation::{ValidationIssue, ValidationReport, ValidationSeverity};
+pub use validation::{
+    validate_config, ValidationIssue, ValidationReport, ValidationSeverity,
+};
