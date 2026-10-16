@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::window::{self, Mode};
 use iced::{Element, Length, Subscription, Task, Theme};
 use multiseat_core::{
     ClientRequest, FeasibilityReport, HardwareTree, MultiseatConfig, SeatState, ServerResponse,
@@ -17,6 +18,7 @@ use crate::assignment::{
 use crate::config_choice::{config_for_action, ConfigSource};
 use crate::ipc::request_async;
 use crate::panels::{device_list, feasibility_list, seat_editor, validation_list};
+use crate::tray::{self, TrayCommand};
 use crate::Message;
 
 /// Root dashboard application.
@@ -39,11 +41,19 @@ pub struct MultiseatApp {
     validation_is_preview: bool,
     last_feasibility: Option<FeasibilityReport>,
     last_config_source: Option<ConfigSource>,
+    /// Tray subscription is running (Windows).
+    tray_enabled: bool,
+    /// Close button hides to tray instead of exiting.
+    hide_to_tray: bool,
+    /// Last known main window id (for show/hide).
+    main_window: Option<window::Id>,
+    /// True after a close-to-hide.
+    window_hidden: bool,
 }
 
 impl MultiseatApp {
     /// Boots the app and kicks an initial snapshot fetch.
-    pub fn new(addr: String) -> (Self, Task<Message>) {
+    pub fn new(addr: String, tray_enabled: bool, hide_to_tray: bool) -> (Self, Task<Message>) {
         let boot_addr = addr.clone();
         let mut draft = MultiseatConfig::default();
         ensure_editable_seat(&mut draft);
@@ -62,6 +72,10 @@ impl MultiseatApp {
             validation_is_preview: false,
             last_feasibility: None,
             last_config_source: None,
+            tray_enabled,
+            hide_to_tray: hide_to_tray && tray_enabled,
+            main_window: None,
+            window_hidden: false,
         };
         (
             app,
@@ -77,18 +91,57 @@ impl MultiseatApp {
         Theme::Dark
     }
 
-    /// Periodic snapshot while connected (live inventory / state).
+    /// IPC timer + close requests + tray channel.
     pub fn subscription(&self) -> Subscription<Message> {
-        if self.connected && !self.busy {
-            iced::time::every(Duration::from_secs(5)).map(|_| Message::TickRefresh)
-        } else {
-            Subscription::none()
+        let mut batch = vec![window::close_requests().map(Message::WindowCloseRequested)];
+
+        if self.tray_enabled {
+            batch.push(tray::subscription(true).map(Message::Tray));
         }
+
+        if self.connected && !self.busy && !self.window_hidden {
+            batch.push(iced::time::every(Duration::from_secs(5)).map(|_| Message::TickRefresh));
+        }
+
+        Subscription::batch(batch)
     }
 
     /// Handles UI and IPC messages.
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::WindowCloseRequested(id) => {
+                self.main_window = Some(id);
+                if self.hide_to_tray && self.tray_enabled {
+                    self.window_hidden = true;
+                    self.status = "Hidden to tray (Show / Exit from tray menu)".into();
+                    window::set_mode(id, Mode::Hidden)
+                } else {
+                    iced::exit()
+                }
+            }
+            Message::ToggleHideToTray => {
+                if self.tray_enabled {
+                    self.hide_to_tray = !self.hide_to_tray;
+                    self.status = format!(
+                        "Hide to tray on close: {}",
+                        if self.hide_to_tray { "on" } else { "off" }
+                    );
+                } else {
+                    self.status = "Tray unavailable on this platform".into();
+                }
+                Task::none()
+            }
+            Message::ExitApp => iced::exit(),
+            Message::Tray(TrayCommand::Show) => self.show_window(),
+            Message::TrayShowWindow(id) => {
+                self.main_window = Some(id);
+                self.window_hidden = false;
+                Task::batch([
+                    window::set_mode(id, Mode::Windowed),
+                    window::gain_focus(id),
+                ])
+            }
+            Message::Tray(TrayCommand::Exit) => iced::exit(),
             Message::Refresh | Message::TickRefresh => self.kick(ClientRequest::GetSnapshot),
             Message::Feasibility => self.kick(ClientRequest::GetFeasibilityReport),
             Message::Validate => {
@@ -260,6 +313,21 @@ impl MultiseatApp {
         Task::perform(request_async(addr, request), Message::DaemonResult)
     }
 
+    fn show_window(&mut self) -> Task<Message> {
+        self.window_hidden = false;
+        self.status = "Window restored from tray".into();
+        if let Some(id) = self.main_window {
+            return Task::batch([
+                window::set_mode(id, Mode::Windowed),
+                window::gain_focus(id),
+            ]);
+        }
+        window::latest().then(|id| match id {
+            Some(id) => Task::done(Message::TrayShowWindow(id)),
+            None => Task::none(),
+        })
+    }
+
     fn apply_response(&mut self, response: ServerResponse) {
         match response {
             ServerResponse::HelloAck { .. } => {
@@ -329,14 +397,31 @@ impl MultiseatApp {
     pub fn view(&self) -> Element<'_, Message> {
         let link = if self.connected { "online" } else { "offline" };
         let dirty = if self.draft_dirty { "yes" } else { "no" };
+        let tray = if self.tray_enabled {
+            format!(
+                "tray · hide_on_close={}",
+                if self.hide_to_tray { "on" } else { "off" }
+            )
+        } else {
+            "no tray".into()
+        };
         let header = column![
             text("RustMultiseat").size(28),
             text(format!("Daemon: {} ({link})", self.addr)).size(14),
-            text(format!("Orchestrator: {:?} · draft dirty={dirty}", self.state)).size(16),
+            text(format!(
+                "Orchestrator: {:?} · draft dirty={dirty} · {tray}",
+                self.state
+            ))
+            .size(16),
             text(&self.status).size(14),
         ]
         .spacing(4);
 
+        let hide_label = if self.hide_to_tray {
+            "Hide to tray: ON"
+        } else {
+            "Hide to tray: OFF"
+        };
         let controls = row![
             button("Refresh").on_press_maybe((!self.busy).then_some(Message::Refresh)),
             button("Feasibility").on_press_maybe((!self.busy).then_some(Message::Feasibility)),
@@ -346,6 +431,11 @@ impl MultiseatApp {
             button("Stop").on_press_maybe((!self.busy).then_some(Message::Stop)),
             button("Ack emergency")
                 .on_press_maybe((!self.busy).then_some(Message::AckEmergency)),
+            button(hide_label).on_press_maybe(
+                self.tray_enabled
+                    .then_some(Message::ToggleHideToTray)
+            ),
+            button("Exit").on_press(Message::ExitApp),
         ]
         .spacing(8);
 

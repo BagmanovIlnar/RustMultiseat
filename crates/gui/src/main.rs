@@ -1,13 +1,14 @@
 //! Minimal Iced dashboard for RustMultiseat.
 //!
-//! Stage 6: live IPC, click-DnD seat assignment with local validation preview,
-//! Validate/Start/Save against the draft. Tray lands later.
+//! Stage 6: live IPC, click-DnD seat assignment, validation preview, and
+//! Windows system tray (hide-on-close + Show/Exit).
 
 mod app;
 mod assignment;
 mod config_choice;
 mod ipc;
 mod panels;
+mod tray;
 
 use clap::Parser;
 use multiseat_core::{DeviceId, DisplayId, SeatId, ServerResponse};
@@ -15,6 +16,7 @@ use multiseat_daemon::DEFAULT_BIND;
 
 use app::MultiseatApp;
 use assignment::Assignable;
+use tray::TrayCommand;
 
 #[derive(Debug, Parser)]
 #[command(name = "multiseat-gui")]
@@ -22,6 +24,10 @@ struct Args {
     /// Daemon endpoint: TCP `host:port` or Windows Named Pipe `\\.\pipe\Name`.
     #[arg(long, default_value = DEFAULT_BIND)]
     addr: String,
+
+    /// Disable the system tray (window closes exit the app).
+    #[arg(long)]
+    no_tray: bool,
 }
 
 /// UI / IPC messages.
@@ -67,6 +73,16 @@ pub enum Message {
     ClearEmergencyKeyboard,
     /// Clear emergency pointer.
     ClearEmergencyPointer,
+    /// OS close button (intercepted when tray hide is on).
+    WindowCloseRequested(iced::window::Id),
+    /// Toggle hide-to-tray preference (Windows tray builds only).
+    ToggleHideToTray,
+    /// Explicit exit from UI.
+    ExitApp,
+    /// Tray menu / double-click.
+    Tray(TrayCommand),
+    /// Internal: apply show to a discovered window id.
+    TrayShowWindow(iced::window::Id),
     /// Result of a background daemon RPC.
     DaemonResult(Result<ServerResponse, String>),
 }
@@ -74,13 +90,19 @@ pub enum Message {
 fn main() -> iced::Result {
     let args = Args::parse();
     let addr = args.addr;
+    let tray_enabled = !args.no_tray && tray::is_available();
+    let hide_on_close = tray_enabled;
+
     iced::application(
-        move || MultiseatApp::new(addr.clone()),
+        move || MultiseatApp::new(addr.clone(), tray_enabled, hide_on_close),
         MultiseatApp::update,
         MultiseatApp::view,
     )
     .title("RustMultiseat")
     .theme(MultiseatApp::theme)
     .subscription(MultiseatApp::subscription)
+    // When hide-to-tray is on, we handle CloseRequested ourselves.
+    .exit_on_close_request(!hide_on_close)
+    .window_size(iced::Size::new(1280.0, 800.0))
     .run()
 }
