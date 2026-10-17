@@ -50,23 +50,38 @@ impl DaemonState {
 
     /// Deterministic mock enumerator (tests / MULTISEAT_USE_MOCK workflows).
     pub fn mock_with_data_dir(data_dir: impl Into<PathBuf>) -> Arc<Self> {
-        Self::with_enumerator(data_dir, HostHardwareEnumerator::mock())
+        Self::with_enumerator(data_dir, HostHardwareEnumerator::mock(), None)
     }
 
     /// Production/dev daemon: native inventory on Windows, mock elsewhere.
     pub fn with_data_dir(data_dir: impl Into<PathBuf>) -> Arc<Self> {
-        Self::with_enumerator(data_dir, HostHardwareEnumerator::auto())
+        Self::with_data_dir_and_bind(data_dir, "")
+    }
+
+    /// Like [`Self::with_data_dir`], and configures session-agent `--addr` to `bind`.
+    pub fn with_data_dir_and_bind(
+        data_dir: impl Into<PathBuf>,
+        bind: impl Into<String>,
+    ) -> Arc<Self> {
+        let bind = bind.into();
+        let addr = if bind.is_empty() { None } else { Some(bind) };
+        Self::with_enumerator(data_dir, HostHardwareEnumerator::auto(), addr)
     }
 
     fn with_enumerator(
         data_dir: impl Into<PathBuf>,
         mut hardware: HostHardwareEnumerator,
+        daemon_addr: Option<String>,
     ) -> Arc<Self> {
         let data_dir = data_dir.into();
         let journal_store = FileJournalStore::in_dir(&data_dir);
         let config_store = FileConfigStore::in_dir(&data_dir);
         let (events, _) = broadcast::channel(64);
-        let sessions = HostSessionBackend::matching_hardware(hardware.is_mock());
+        let mut sessions = HostSessionBackend::matching_hardware(hardware.is_mock());
+        if let Some(addr) = daemon_addr {
+            info!(%addr, "session backends will spawn agents against daemon bind");
+            sessions.set_daemon_addr(addr);
+        }
         let snapshot = hardware.snapshot().ok();
         let output_count = snapshot
             .as_ref()

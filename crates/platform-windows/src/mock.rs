@@ -217,6 +217,8 @@ pub struct MockSessionBackend {
     next_id: u32,
     sessions: HashMap<SeatId, SessionId>,
     agents: HashMap<SeatId, Child>,
+    /// Daemon bind/connect string passed to spawned agents as `--addr`.
+    daemon_addr: Option<String>,
     /// When true, [`SessionBackend::probe`] returns false.
     pub probe_ok: bool,
 }
@@ -227,6 +229,7 @@ impl std::fmt::Debug for MockSessionBackend {
             .field("next_id", &self.next_id)
             .field("sessions", &self.sessions)
             .field("agents", &self.agents.len())
+            .field("daemon_addr", &self.daemon_addr)
             .field("probe_ok", &self.probe_ok)
             .finish()
     }
@@ -238,6 +241,7 @@ impl Default for MockSessionBackend {
             next_id: 10,
             sessions: HashMap::new(),
             agents: HashMap::new(),
+            daemon_addr: None,
             probe_ok: false,
         }
     }
@@ -250,8 +254,15 @@ impl MockSessionBackend {
             next_id: 10,
             sessions: HashMap::new(),
             agents: HashMap::new(),
+            daemon_addr: None,
             probe_ok: true,
         }
+    }
+
+    /// Sets the daemon endpoint used when spawning session agents.
+    pub fn set_daemon_addr(&mut self, addr: impl Into<String>) {
+        let addr = addr.into();
+        self.daemon_addr = if addr.is_empty() { None } else { Some(addr) };
     }
 
     /// Number of tracked agent child processes (tests).
@@ -294,7 +305,7 @@ impl SessionBackend for MockSessionBackend {
             stop_agent_child(&mut prev);
         }
 
-        match spawn_session_agent(session.seat_id, None) {
+        match spawn_session_agent(session.seat_id, self.daemon_addr.as_deref()) {
             Ok(child) => {
                 info!(
                     seat = %session.seat_id,
@@ -356,6 +367,7 @@ mod tests {
     #[test]
     fn start_agent_soft_ok_without_binary() {
         let mut backend = MockSessionBackend::available();
+        backend.set_daemon_addr("127.0.0.1:17890");
         let session = backend.create_or_connect(&sample_seat()).unwrap();
         // PATH name fallback usually cannot spawn in CI → soft Ok unless REQUIRE set.
         backend.start_agent(&session).unwrap();

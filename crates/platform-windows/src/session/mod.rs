@@ -13,8 +13,8 @@ mod stub;
 use multiseat_core::DualSessionProbeResult;
 
 pub use agent_launch::{
-    agent_args, require_agent, resolve_agent_binary, spawn_session_agent, spawn_session_agent_at,
-    stop_agent_child, AGENT_BIN_ENV, REQUIRE_AGENT_ENV,
+    agent_args, require_agent, resolve_agent_binary, resolve_daemon_addr, spawn_session_agent,
+    spawn_session_agent_at, stop_agent_child, AGENT_BIN_ENV, DAEMON_ADDR_ENV, REQUIRE_AGENT_ENV,
 };
 pub use backend::WindowsSessionBackend;
 pub use host::HostSessionBackend;

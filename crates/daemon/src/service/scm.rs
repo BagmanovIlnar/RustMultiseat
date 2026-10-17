@@ -314,7 +314,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
         "SCM service running"
     );
 
-    let state = DaemonState::with_data_dir(&runtime.data_dir);
+    let state = DaemonState::with_data_dir_and_bind(&runtime.data_dir, &runtime.bind);
     let bind = runtime.bind.clone();
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,

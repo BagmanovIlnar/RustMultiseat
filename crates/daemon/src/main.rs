@@ -134,7 +134,7 @@ fn run_scm_service(bind: &str, data_dir: &std::path::Path) -> std::io::Result<()
 }
 
 async fn run_foreground(bind: &str, data_dir: PathBuf) -> std::io::Result<()> {
-    let state = DaemonState::with_data_dir(data_dir);
+    let state = DaemonState::with_data_dir_and_bind(data_dir, bind);
     let mut host = ForegroundServiceHost::new();
     let stop = host.stop_flag();
 

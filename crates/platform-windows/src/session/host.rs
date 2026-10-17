@@ -56,6 +56,15 @@ impl HostSessionBackend {
     pub fn is_mock(&self) -> bool {
         matches!(self, Self::Mock(_))
     }
+
+    /// Sets the daemon bind/connect string for agent spawn / future native launch.
+    pub fn set_daemon_addr(&mut self, addr: impl Into<String>) {
+        let addr = addr.into();
+        match self {
+            Self::Mock(inner) => inner.set_daemon_addr(addr),
+            Self::Native(inner) => inner.set_daemon_addr(addr),
+        }
+    }
 }
 
 impl SessionBackend for HostSessionBackend {

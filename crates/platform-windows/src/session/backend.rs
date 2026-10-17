@@ -21,6 +21,8 @@ use super::probe_dual_sessions;
 pub struct WindowsSessionBackend {
     probe: DualSessionProbeResult,
     seats: HashMap<SeatId, SessionId>,
+    /// Stored for a future CreateProcessAsUser launch path.
+    daemon_addr: Option<String>,
 }
 
 impl Default for WindowsSessionBackend {
@@ -41,7 +43,14 @@ impl WindowsSessionBackend {
         Self {
             probe,
             seats: HashMap::new(),
+            daemon_addr: None,
         }
+    }
+
+    /// Sets the daemon endpoint that a future native agent launch will use.
+    pub fn set_daemon_addr(&mut self, addr: impl Into<String>) {
+        let addr = addr.into();
+        self.daemon_addr = if addr.is_empty() { None } else { Some(addr) };
     }
 
     /// Latest dual-session probe evidence.
@@ -115,6 +124,7 @@ impl SessionBackend for WindowsSessionBackend {
         warn!(
             seat = %session.seat_id,
             session = session.session_id.0,
+            daemon_addr = ?self.daemon_addr,
             "native start_agent refused (CreateProcessAsUser / least-privilege token path pending)"
         );
         Err(CoreError::Backend(
