@@ -8,6 +8,7 @@ use multiseat_core::{
 };
 use tracing::{info, warn};
 
+use super::agent_as_user::{launch_agent_in_session, stop_native_agent};
 use super::probe_dual_sessions;
 
 /// Windows session backend for Stage 0 experiments.
@@ -17,11 +18,15 @@ use super::probe_dual_sessions;
 /// - [`SessionBackend::create_or_connect`] never invents a new local interactive
 ///   session; it may only bind a seat to an already-active session id when the
 ///   probe passed.
+/// - [`SessionBackend::start_agent`] uses `CreateProcessAsUser` only when
+///   `MULTISEAT_NATIVE_AGENT_LAUNCH=1` (honest Win32 errors otherwise / when off).
 #[derive(Debug)]
 pub struct WindowsSessionBackend {
     probe: DualSessionProbeResult,
     seats: HashMap<SeatId, SessionId>,
-    /// Stored for a future CreateProcessAsUser launch path.
+    /// PIDs of agents launched via CreateProcessAsUser.
+    agents: HashMap<SeatId, u32>,
+    /// Daemon bind/connect string passed to agents as `--addr`.
     daemon_addr: Option<String>,
 }
 
@@ -43,14 +48,20 @@ impl WindowsSessionBackend {
         Self {
             probe,
             seats: HashMap::new(),
+            agents: HashMap::new(),
             daemon_addr: None,
         }
     }
 
-    /// Sets the daemon endpoint that a future native agent launch will use.
+    /// Sets the daemon endpoint that native agent launch will use.
     pub fn set_daemon_addr(&mut self, addr: impl Into<String>) {
         let addr = addr.into();
         self.daemon_addr = if addr.is_empty() { None } else { Some(addr) };
+    }
+
+    /// Number of tracked native agent PIDs (tests).
+    pub fn agent_count(&self) -> usize {
+        self.agents.len()
     }
 
     /// Latest dual-session probe evidence.
@@ -118,19 +129,30 @@ impl SessionBackend for WindowsSessionBackend {
         if !self.seats.contains_key(&session.seat_id) {
             return Err(CoreError::Backend("unknown session".into()));
         }
-        // Cross-session launch needs CreateProcessAsUser with the target session
-        // token. Mock backends spawn in-process for heartbeat lab; native stays
-        // honest until that Stage 0 path is proven.
-        warn!(
-            seat = %session.seat_id,
-            session = session.session_id.0,
-            daemon_addr = ?self.daemon_addr,
-            "native start_agent refused (CreateProcessAsUser / least-privilege token path pending)"
-        );
-        Err(CoreError::Backend(
-            "native start_agent not implemented (need CreateProcessAsUser into target WTS session; use mock backend or MULTISEAT_USE_MOCK=1 for same-session spawn)"
-                .into(),
-        ))
+        if let Some(prev) = self.agents.remove(&session.seat_id) {
+            stop_native_agent(prev);
+        }
+
+        match launch_agent_in_session(
+            session.session_id.0,
+            session.seat_id,
+            self.daemon_addr.as_deref(),
+        ) {
+            Ok(launch) => {
+                self.agents.insert(session.seat_id, launch.pid);
+                Ok(())
+            }
+            Err(err) => {
+                warn!(
+                    seat = %session.seat_id,
+                    session = session.session_id.0,
+                    daemon_addr = ?self.daemon_addr,
+                    error = %err,
+                    "native start_agent failed"
+                );
+                Err(err)
+            }
+        }
     }
 
     fn lock(&mut self, session: &SessionHandle) -> CoreResult<()> {
@@ -143,6 +165,9 @@ impl SessionBackend for WindowsSessionBackend {
     }
 
     fn disconnect(&mut self, session: &SessionHandle) -> CoreResult<()> {
+        if let Some(pid) = self.agents.remove(&session.seat_id) {
+            stop_native_agent(pid);
+        }
         self.seats.remove(&session.seat_id);
         Ok(())
     }
@@ -152,6 +177,14 @@ impl SessionBackend for WindowsSessionBackend {
             Ok(BackendHealth::ok())
         } else {
             Ok(BackendHealth::down("session not bound"))
+        }
+    }
+}
+
+impl Drop for WindowsSessionBackend {
+    fn drop(&mut self) {
+        for (_, pid) in self.agents.drain() {
+            stop_native_agent(pid);
         }
     }
 }
@@ -182,5 +215,15 @@ mod tests {
         }
         let err = backend.create_or_connect(&sample_seat()).unwrap_err();
         assert!(err.to_string().contains("native session create unavailable"));
+    }
+
+    #[test]
+    fn start_agent_unknown_session_errs() {
+        let mut backend = WindowsSessionBackend::new();
+        let session = SessionHandle {
+            seat_id: SeatId(99),
+            session_id: SessionId(1),
+        };
+        assert!(backend.start_agent(&session).is_err());
     }
 }

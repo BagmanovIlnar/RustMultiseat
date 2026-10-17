@@ -1,8 +1,8 @@
 //! Launch helper for `multiseat-session-agent` (same-machine spawn).
 //!
 //! Mock backends use this to exercise the heartbeat path. Native
-//! `WindowsSessionBackend` still refuses until a documented
-//! CreateProcessAsUser / session-token path exists (Stage 0).
+//! `WindowsSessionBackend` uses [`super::agent_as_user`] (`CreateProcessAsUser`)
+//! when `MULTISEAT_NATIVE_AGENT_LAUNCH=1`.
 
 use std::env;
 use std::path::{Path, PathBuf};
