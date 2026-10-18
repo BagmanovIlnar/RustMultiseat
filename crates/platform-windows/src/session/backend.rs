@@ -10,6 +10,7 @@ use tracing::{info, warn};
 
 use super::agent_as_user::{launch_agent_in_session, stop_native_agent};
 use super::probe_dual_sessions;
+use super::wts_control::{disconnect_session, lock_session};
 
 /// Windows session backend for Stage 0 experiments.
 ///
@@ -20,6 +21,8 @@ use super::probe_dual_sessions;
 ///   probe passed.
 /// - [`SessionBackend::start_agent`] uses `CreateProcessAsUser` only when
 ///   `MULTISEAT_NATIVE_AGENT_LAUNCH=1` (honest Win32 errors otherwise / when off).
+/// - [`SessionBackend::lock`] / WTS disconnect side effects require
+///   `MULTISEAT_NATIVE_SESSION_CONTROL=1`.
 #[derive(Debug)]
 pub struct WindowsSessionBackend {
     probe: DualSessionProbeResult,
@@ -159,24 +162,55 @@ impl SessionBackend for WindowsSessionBackend {
         if !self.seats.contains_key(&session.seat_id) {
             return Err(CoreError::Backend("unknown session".into()));
         }
-        Err(CoreError::Backend(
-            "native session lock not implemented".into(),
-        ))
+        match lock_session(session.session_id.0) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                warn!(
+                    seat = %session.seat_id,
+                    session = session.session_id.0,
+                    error = %err,
+                    "native session lock failed"
+                );
+                Err(err)
+            }
+        }
     }
 
     fn disconnect(&mut self, session: &SessionHandle) -> CoreResult<()> {
         if let Some(pid) = self.agents.remove(&session.seat_id) {
             stop_native_agent(pid);
         }
-        self.seats.remove(&session.seat_id);
+        let session_id = self.seats.remove(&session.seat_id);
+        if let Some(session_id) = session_id {
+            // Soft-skip when flag off; real Win32 errors when enabled.
+            if let Err(err) = disconnect_session(session_id.0) {
+                warn!(
+                    seat = %session.seat_id,
+                    session = session_id.0,
+                    error = %err,
+                    "native WTS disconnect failed after local unbind"
+                );
+                return Err(err);
+            }
+        }
         Ok(())
     }
 
     fn health(&self, session: &SessionHandle) -> CoreResult<BackendHealth> {
-        if self.seats.contains_key(&session.seat_id) {
+        let Some(bound) = self.seats.get(&session.seat_id).copied() else {
+            return Ok(BackendHealth::down("session not bound"));
+        };
+        let still_listed = self
+            .probe
+            .sessions
+            .iter()
+            .any(|s| s.session_id == bound.0);
+        if still_listed {
             Ok(BackendHealth::ok())
         } else {
-            Ok(BackendHealth::down("session not bound"))
+            Ok(BackendHealth::down(
+                "bound WTS session id missing from last probe snapshot",
+            ))
         }
     }
 }
@@ -225,5 +259,15 @@ mod tests {
             session_id: SessionId(1),
         };
         assert!(backend.start_agent(&session).is_err());
+    }
+
+    #[test]
+    fn lock_unknown_session_errs() {
+        let mut backend = WindowsSessionBackend::new();
+        let session = SessionHandle {
+            seat_id: SeatId(99),
+            session_id: SessionId(1),
+        };
+        assert!(backend.lock(&session).is_err());
     }
 }

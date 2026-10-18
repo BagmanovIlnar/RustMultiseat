@@ -79,16 +79,7 @@ fn launch_windows(
     seat_id: SeatId,
     daemon_addr: Option<&str>,
 ) -> CoreResult<NativeAgentLaunch> {
-    use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
-
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::System::RemoteDesktop::WTSQueryUserToken;
-    use windows::Win32::System::Threading::{
-        CreateProcessAsUserW, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION,
-        STARTUPINFOW,
-    };
 
     let bin = resolve_agent_binary().ok_or_else(|| {
         CoreError::Backend("session-agent binary path could not be resolved".into())
@@ -104,14 +95,6 @@ fn launch_windows(
     let addr = resolve_daemon_addr(daemon_addr);
     let argv = agent_args(seat_id, addr.as_deref());
     let cmdline = build_command_line(&bin, &argv);
-    let mut cmdline_wide: Vec<u16> = std::ffi::OsString::from(&cmdline)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let desktop: Vec<u16> = OsStrExt::encode_wide(std::ffi::OsStr::new("winsta0\\default"))
-        .chain(std::iter::once(0))
-        .collect();
-
     info!(
         seat = %seat_id,
         session_id,
@@ -119,6 +102,39 @@ fn launch_windows(
         %cmdline,
         "attempting CreateProcessAsUser for session-agent"
     );
+    let pid = spawn_command_in_session(session_id, &cmdline)?;
+    info!(
+        seat = %seat_id,
+        session_id,
+        pid,
+        "session-agent launched via CreateProcessAsUser"
+    );
+    Ok(NativeAgentLaunch { pid })
+}
+
+/// Spawns `cmdline` in `session_id` via `WTSQueryUserToken` + `CreateProcessAsUserW`.
+///
+/// Caller must already hold required privileges (`SE_TCB_NAME`). Used by agent
+/// launch and session lock helpers.
+#[cfg(windows)]
+pub(crate) fn spawn_command_in_session(session_id: u32, cmdline: &str) -> CoreResult<u32> {
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::RemoteDesktop::WTSQueryUserToken;
+    use windows::Win32::System::Threading::{
+        CreateProcessAsUserW, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION,
+        STARTUPINFOW,
+    };
+
+    let mut cmdline_wide: Vec<u16> = std::ffi::OsString::from(cmdline)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let desktop: Vec<u16> = OsStrExt::encode_wide(std::ffi::OsStr::new("winsta0\\default"))
+        .chain(std::iter::once(0))
+        .collect();
 
     unsafe {
         let mut user_token = HANDLE::default();
@@ -134,7 +150,7 @@ fn launch_windows(
         startup.lpDesktop = windows::core::PWSTR(desktop.as_ptr() as *mut u16);
 
         let mut process_info = PROCESS_INFORMATION::default();
-        let created = CreateProcessAsUserW(
+        CreateProcessAsUserW(
             Some(token.0),
             PCWSTR::null(),
             Some(windows::core::PWSTR(cmdline_wide.as_mut_ptr())),
@@ -146,25 +162,17 @@ fn launch_windows(
             None,
             &startup,
             &mut process_info,
-        );
-
-        if let Err(err) = created {
-            return Err(CoreError::Backend(format!(
+        )
+        .map_err(|err| {
+            CoreError::Backend(format!(
                 "CreateProcessAsUserW failed for session {session_id}: {err}"
-            )));
-        }
+            ))
+        })?;
 
         let pid = process_info.dwProcessId;
         let _ = CloseHandle(process_info.hThread);
         let _ = CloseHandle(process_info.hProcess);
-
-        info!(
-            seat = %seat_id,
-            session_id,
-            pid,
-            "session-agent launched via CreateProcessAsUser"
-        );
-        Ok(NativeAgentLaunch { pid })
+        Ok(pid)
     }
 }
 

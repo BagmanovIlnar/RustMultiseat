@@ -4,6 +4,7 @@ mod agent_as_user;
 mod agent_launch;
 mod backend;
 mod host;
+mod wts_control;
 
 #[cfg(windows)]
 mod wts;
@@ -23,6 +24,9 @@ pub use agent_launch::{
 };
 pub use backend::WindowsSessionBackend;
 pub use host::HostSessionBackend;
+pub use wts_control::{
+    disconnect_session, lock_session, native_session_control_enabled, NATIVE_SESSION_CONTROL_ENV,
+};
 
 /// Enumerates local sessions and evaluates the dual-session Stage 0 check.
 ///
