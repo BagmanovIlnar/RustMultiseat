@@ -28,6 +28,19 @@ pub use wts_control::{
     disconnect_session, lock_session, native_session_control_enabled, NATIVE_SESSION_CONTROL_ENV,
 };
 
+/// Logs opt-in native session/agent flags once at daemon boot (host diagnostics).
+pub fn log_native_session_flags() {
+    use tracing::info;
+
+    info!(
+        agent_launch = native_agent_launch_enabled(),
+        session_control = native_session_control_enabled(),
+        agent_launch_env = NATIVE_AGENT_LAUNCH_ENV,
+        session_control_env = NATIVE_SESSION_CONTROL_ENV,
+        "native session feature flags"
+    );
+}
+
 /// Enumerates local sessions and evaluates the dual-session Stage 0 check.
 ///
 /// Does **not** attempt undocumented session creation. On client Windows the

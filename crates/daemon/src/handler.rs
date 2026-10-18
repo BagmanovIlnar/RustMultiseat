@@ -11,8 +11,8 @@ use multiseat_core::{
 };
 use multiseat_core::InputDeviceKind;
 use multiseat_platform_windows::{
-    probe_display, probe_dual_sessions, probe_input, HostDisplayBackend, HostHardwareEnumerator,
-    HostInputRouter, HostSessionBackend,
+    log_native_session_flags, probe_display, probe_dual_sessions, probe_input, HostDisplayBackend,
+    HostHardwareEnumerator, HostInputRouter, HostSessionBackend,
 };
 use tokio::sync::{broadcast, Mutex};
 use tracing::{info, warn};
@@ -116,6 +116,7 @@ impl DaemonState {
             outputs = output_count,
             "backends selected"
         );
+        log_native_session_flags();
         let _ = hardware.start_notifications();
         let mut orchestrator = SeatOrchestrator::new(hardware, sessions, displays, inputs);
 

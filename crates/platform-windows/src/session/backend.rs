@@ -132,6 +132,7 @@ impl SessionBackend for WindowsSessionBackend {
         if !self.seats.contains_key(&session.seat_id) {
             return Err(CoreError::Backend("unknown session".into()));
         }
+        self.refresh_probe();
         if let Some(prev) = self.agents.remove(&session.seat_id) {
             stop_native_agent(prev);
         }
@@ -162,6 +163,7 @@ impl SessionBackend for WindowsSessionBackend {
         if !self.seats.contains_key(&session.seat_id) {
             return Err(CoreError::Backend("unknown session".into()));
         }
+        self.refresh_probe();
         match lock_session(session.session_id.0) {
             Ok(()) => Ok(()),
             Err(err) => {
@@ -177,6 +179,7 @@ impl SessionBackend for WindowsSessionBackend {
     }
 
     fn disconnect(&mut self, session: &SessionHandle) -> CoreResult<()> {
+        self.refresh_probe();
         if let Some(pid) = self.agents.remove(&session.seat_id) {
             stop_native_agent(pid);
         }
@@ -200,16 +203,14 @@ impl SessionBackend for WindowsSessionBackend {
         let Some(bound) = self.seats.get(&session.seat_id).copied() else {
             return Ok(BackendHealth::down("session not bound"));
         };
-        let still_listed = self
-            .probe
-            .sessions
-            .iter()
-            .any(|s| s.session_id == bound.0);
+        // Live WTS enumerate — do not trust a stale boot-time probe snapshot.
+        let live = probe_dual_sessions();
+        let still_listed = live.sessions.iter().any(|s| s.session_id == bound.0);
         if still_listed {
             Ok(BackendHealth::ok())
         } else {
             Ok(BackendHealth::down(
-                "bound WTS session id missing from last probe snapshot",
+                "bound WTS session id missing from live probe",
             ))
         }
     }

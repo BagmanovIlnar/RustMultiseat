@@ -22,7 +22,7 @@ pub use inventory::{prefer_native, probe_capabilities, WindowsHardwareEnumerator
 pub use mock::{MockDisplayBackend, MockHardwareEnumerator, MockInputRouter, MockSessionBackend};
 pub use probe::detect_capabilities;
 pub use session::{
-    agent_args, launch_agent_in_session, native_agent_launch_enabled,
+    agent_args, launch_agent_in_session, log_native_session_flags, native_agent_launch_enabled,
     native_session_control_enabled, probe_dual_sessions, resolve_agent_binary, resolve_daemon_addr,
     spawn_session_agent, HostSessionBackend, WindowsSessionBackend, AGENT_BIN_ENV, DAEMON_ADDR_ENV,
     NATIVE_AGENT_LAUNCH_ENV, NATIVE_SESSION_CONTROL_ENV, REQUIRE_AGENT_ENV,

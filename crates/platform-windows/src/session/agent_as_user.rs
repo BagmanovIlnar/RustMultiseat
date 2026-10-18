@@ -1,9 +1,11 @@
 //! Native session-agent launch via documented WTS + `CreateProcessAsUser`.
 //!
 //! Disabled by default (`MULTISEAT_NATIVE_AGENT_LAUNCH`). When enabled on
-//! Windows, attempts `WTSQueryUserToken` + `CreateProcessAsUserW` into the
-//! bound session. Failures surface real Win32 errors — never a fake Ok.
+//! Windows, the launch path is:
+//! `WTSQueryUserToken` → `DuplicateTokenEx` (primary) → `CreateEnvironmentBlock`
+//! → `CreateProcessAsUserW` → `DestroyEnvironmentBlock`.
 //!
+//! Failures surface real Win32 errors — never a fake Ok.
 //! Requires the caller to hold `SE_TCB_NAME` (typical for a Session 0 service).
 
 use std::env;
@@ -112,16 +114,21 @@ fn launch_windows(
     Ok(NativeAgentLaunch { pid })
 }
 
-/// Spawns `cmdline` in `session_id` via `WTSQueryUserToken` + `CreateProcessAsUserW`.
+/// Spawns `cmdline` in `session_id` with a primary token + user environment.
 ///
 /// Caller must already hold required privileges (`SE_TCB_NAME`). Used by agent
 /// launch and session lock helpers.
 #[cfg(windows)]
 pub(crate) fn spawn_command_in_session(session_id: u32, cmdline: &str) -> CoreResult<u32> {
+    use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
 
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{
+        DuplicateTokenEx, SecurityImpersonation, TokenPrimary, TOKEN_ALL_ACCESS,
+    };
+    use windows::Win32::System::Environment::CreateEnvironmentBlock;
     use windows::Win32::System::RemoteDesktop::WTSQueryUserToken;
     use windows::Win32::System::Threading::{
         CreateProcessAsUserW, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION,
@@ -143,7 +150,31 @@ pub(crate) fn spawn_command_in_session(session_id: u32, cmdline: &str) -> CoreRe
                 "WTSQueryUserToken({session_id}) failed: {err} (need SE_TCB_NAME / Session 0 service)"
             ))
         })?;
-        let token = HandleGuard(user_token);
+        let queried = HandleGuard(user_token);
+
+        let mut primary = HANDLE::default();
+        DuplicateTokenEx(
+            queried.0,
+            TOKEN_ALL_ACCESS,
+            None,
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut primary,
+        )
+        .map_err(|err| {
+            CoreError::Backend(format!(
+                "DuplicateTokenEx(primary) for session {session_id} failed: {err}"
+            ))
+        })?;
+        let primary = HandleGuard(primary);
+
+        let mut env_raw: *mut c_void = std::ptr::null_mut();
+        CreateEnvironmentBlock(&mut env_raw, Some(primary.0), false).map_err(|err| {
+            CoreError::Backend(format!(
+                "CreateEnvironmentBlock for session {session_id} failed: {err}"
+            ))
+        })?;
+        let env = EnvBlockGuard(env_raw);
 
         let mut startup = STARTUPINFOW::default();
         startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
@@ -151,14 +182,14 @@ pub(crate) fn spawn_command_in_session(session_id: u32, cmdline: &str) -> CoreRe
 
         let mut process_info = PROCESS_INFORMATION::default();
         CreateProcessAsUserW(
-            Some(token.0),
+            Some(primary.0),
             PCWSTR::null(),
             Some(windows::core::PWSTR(cmdline_wide.as_mut_ptr())),
             None,
             None,
             false,
             CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
-            None,
+            Some(env.0),
             None,
             &startup,
             &mut process_info,
@@ -172,6 +203,8 @@ pub(crate) fn spawn_command_in_session(session_id: u32, cmdline: &str) -> CoreRe
         let pid = process_info.dwProcessId;
         let _ = CloseHandle(process_info.hThread);
         let _ = CloseHandle(process_info.hProcess);
+        // env Drop runs DestroyEnvironmentBlock after CreateProcessAsUser copied it.
+        drop(env);
         Ok(pid)
     }
 }
@@ -236,6 +269,20 @@ impl Drop for HandleGuard {
     fn drop(&mut self) {
         unsafe {
             let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+struct EnvBlockGuard(*mut std::ffi::c_void);
+
+#[cfg(windows)]
+impl Drop for EnvBlockGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                let _ = windows::Win32::System::Environment::DestroyEnvironmentBlock(self.0);
+            }
         }
     }
 }
