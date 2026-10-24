@@ -13,14 +13,20 @@ use multiseat_core::{
 use tracing::{info, warn};
 
 use crate::debounce::DebounceGate;
+use crate::inventory::SnapshotCache;
 use crate::session::{require_agent, spawn_session_agent, stop_agent_child};
 
 /// In-memory hardware enumerator with a fixed lab topology.
-#[derive(Debug, Clone)]
+///
+/// Hot-plug simulation: [`Self::bump_revision`] signals the debounce gate;
+/// after the quiet window [`HardwareEnumerator::poll_invalidated`] clears the
+/// cache and the next [`snapshot`](HardwareEnumerator::snapshot) rebuilds from
+/// the in-memory tree (with bumped revision).
+#[derive(Debug)]
 pub struct MockHardwareEnumerator {
     tree: HardwareTree,
     notifications: bool,
-    gate: Arc<DebounceGate>,
+    cache: SnapshotCache,
 }
 
 impl Default for MockHardwareEnumerator {
@@ -174,17 +180,34 @@ impl MockHardwareEnumerator {
             capabilities: caps,
         };
 
+        let gate = Arc::new(DebounceGate::default_hotplug());
         Self {
             tree,
             notifications: false,
-            gate: Arc::new(DebounceGate::default_hotplug()),
+            cache: SnapshotCache::new(gate),
         }
     }
 
     /// Bumps revision and signals a debounced hot-plug rescan.
     pub fn bump_revision(&mut self) {
         self.tree.revision = self.tree.revision.saturating_add(1);
-        self.gate.signal();
+        self.cache.gate().signal();
+    }
+
+    /// Whether notifications were started (tests).
+    pub fn notifications_enabled(&self) -> bool {
+        self.notifications
+    }
+}
+
+impl Clone for MockHardwareEnumerator {
+    fn clone(&self) -> Self {
+        let gate = Arc::new(DebounceGate::new(self.cache.gate().window()));
+        Self {
+            tree: self.tree.clone(),
+            notifications: self.notifications,
+            cache: SnapshotCache::new(gate),
+        }
     }
 }
 
@@ -194,7 +217,7 @@ impl HardwareEnumerator for MockHardwareEnumerator {
     }
 
     fn snapshot(&self) -> CoreResult<HardwareTree> {
-        Ok(self.tree.clone())
+        self.cache.get_or_build(|| Ok(self.tree.clone()))
     }
 
     fn start_notifications(&mut self) -> CoreResult<()> {
@@ -204,7 +227,14 @@ impl HardwareEnumerator for MockHardwareEnumerator {
     }
 
     fn poll_invalidated(&mut self) -> bool {
-        self.gate.take_ready()
+        let ready = self.cache.poll_invalidated();
+        if ready {
+            tracing::info!(
+                revision = self.tree.revision,
+                "mock hot-plug debounce ready; snapshot cache invalidated"
+            );
+        }
+        ready
     }
 }
 
@@ -352,6 +382,8 @@ impl SessionBackend for MockSessionBackend {
 mod tests {
     use super::*;
     use multiseat_core::SeatConfig;
+    use std::thread;
+    use std::time::Duration;
 
     fn sample_seat() -> SeatConfig {
         SeatConfig {
@@ -383,6 +415,25 @@ mod tests {
             session_id: SessionId(1),
         };
         assert!(backend.start_agent(&session).is_err());
+    }
+
+    #[test]
+    fn hotplug_signal_debounces_then_rescans_with_new_revision() {
+        let mut hw = MockHardwareEnumerator::with_lab_fixture();
+        // Short window for the test: rebuild enumerator with fast gate via bump path.
+        // Replace cache gate by constructing with custom debounce through bump + sleep.
+        let first = hw.snapshot().unwrap();
+        assert_eq!(first.revision, 1);
+        // Cached hit — same revision without invalidate.
+        assert_eq!(hw.snapshot().unwrap().revision, 1);
+
+        hw.bump_revision();
+        assert!(!hw.poll_invalidated(), "quiet window not elapsed yet");
+        thread::sleep(Duration::from_millis(350));
+        assert!(hw.poll_invalidated());
+        let second = hw.snapshot().unwrap();
+        assert_eq!(second.revision, 2);
+        assert_eq!(hw.snapshot().unwrap().revision, 2, "cache hit after rescan");
     }
 }
 

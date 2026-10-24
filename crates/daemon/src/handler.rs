@@ -209,15 +209,31 @@ impl DaemonState {
         handle.spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_millis(250));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut last_published: Option<u64> = None;
             loop {
                 ticker.tick().await;
                 let mut orch = state.orchestrator.lock().await;
+                // Event → DebounceGate quiet window → invalidate cache → rescan.
                 if !orch.hardware_mut().poll_invalidated() {
                     continue;
                 }
                 match orch.hardware().snapshot() {
                     Ok(tree) => {
-                        info!(revision = tree.revision, "hot-plug rescan published");
+                        if last_published == Some(tree.revision) {
+                            info!(
+                                revision = tree.revision,
+                                "hot-plug rescan skipped (revision unchanged)"
+                            );
+                            continue;
+                        }
+                        last_published = Some(tree.revision);
+                        info!(
+                            revision = tree.revision,
+                            gpus = tree.gpus.len(),
+                            displays = tree.displays.len(),
+                            inputs = tree.input_devices.len(),
+                            "hot-plug rescan published"
+                        );
                         let _ = state.events.send(DaemonEvent::HardwareUpdated(tree));
                     }
                     Err(err) => warn!(error = %err, "hot-plug rescan failed"),

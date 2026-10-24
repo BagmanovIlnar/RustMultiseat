@@ -16,13 +16,33 @@ pub struct DeviceId {
 
 impl DeviceId {
     /// Creates a device id from an instance id only.
+    ///
+    /// Instance IDs are normalized to ASCII uppercase so Windows case folding
+    /// does not produce unstable inventory keys across rescans.
     pub fn from_instance(instance_id: impl Into<String>) -> Self {
         Self {
-            instance_id: instance_id.into(),
+            instance_id: stabilize_instance_id(instance_id.into()),
             interface_path: None,
             container_id: None,
         }
     }
+
+    /// Creates a device id with optional interface / container fields.
+    pub fn new(
+        instance_id: impl Into<String>,
+        interface_path: Option<String>,
+        container_id: Option<String>,
+    ) -> Self {
+        Self {
+            instance_id: stabilize_instance_id(instance_id.into()),
+            interface_path: interface_path.map(stabilize_instance_id),
+            container_id: container_id.map(|s| s.to_ascii_lowercase()),
+        }
+    }
+}
+
+fn stabilize_instance_id(raw: String) -> String {
+    raw.to_ascii_uppercase()
 }
 
 impl fmt::Display for DeviceId {

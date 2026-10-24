@@ -36,9 +36,15 @@ unsafe fn enumerate_gpus_and_displays_inner() -> CoreResult<(Vec<GpuInfo>, Vec<D
         }
 
         let description = wchar_to_string(&desc.Description);
+        // Prefer AdapterLuid over EnumAdapters ordinal — ordinals shift when
+        // adapters appear/disappear; LUID stays stable for the adapter lifetime.
+        let luid = desc.AdapterLuid;
         let gpu_id = format!(
-            "pci:{:04x}:{:04x}:adapter{}",
-            desc.VendorId, desc.DeviceId, adapter_index
+            "pci:{:04x}:{:04x}:luid:{:08x}-{:08x}",
+            desc.VendorId,
+            desc.DeviceId,
+            luid.HighPart as u32,
+            luid.LowPart
         );
 
         gpus.push(GpuInfo {

@@ -1,5 +1,7 @@
 //! Hardware inventory backends (native Windows + shared helpers).
 
+mod snapshot_cache;
+
 #[cfg(windows)]
 mod cm_usb;
 #[cfg(windows)]
@@ -22,6 +24,8 @@ mod windows_stub;
 
 #[cfg(not(windows))]
 pub use windows_stub::WindowsHardwareEnumerator;
+
+pub use snapshot_cache::SnapshotCache;
 
 use multiseat_core::PlatformCapabilities;
 

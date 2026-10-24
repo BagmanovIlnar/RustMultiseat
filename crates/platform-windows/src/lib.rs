@@ -18,7 +18,7 @@ pub use debounce::DebounceGate;
 pub use display::{probe_display, HostDisplayBackend, WindowsDisplayBackend};
 pub use host::HostHardwareEnumerator;
 pub use input::{probe_input, HostInputRouter, WindowsInputRouter};
-pub use inventory::{prefer_native, probe_capabilities, WindowsHardwareEnumerator};
+pub use inventory::{prefer_native, probe_capabilities, SnapshotCache, WindowsHardwareEnumerator};
 pub use mock::{MockDisplayBackend, MockHardwareEnumerator, MockInputRouter, MockSessionBackend};
 pub use probe::detect_capabilities;
 pub use session::{
