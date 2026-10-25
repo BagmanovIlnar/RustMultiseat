@@ -135,42 +135,66 @@ impl MockHardwareEnumerator {
             }],
             input_devices: vec![
                 InputDeviceInfo {
-                    id: DeviceId::from_instance("HID\\VID_AAAA&PID_0001\\HOST_KBD"),
+                    id: DeviceId::new(
+                        "HID\\VID_AAAA&PID_0001\\HOST_KBD",
+                        Some(r"\\?\hid#vid_aaaa&pid_0001#host_kbd".into()),
+                        Some("aaaaaaaa-0000-0000-0000-000000000001".into()),
+                    ),
                     kind: InputDeviceKind::Keyboard,
                     name: "Host Keyboard".into(),
                     vendor_id: Some(0xAAAA),
                     product_id: Some(0x0001),
                 },
                 InputDeviceInfo {
-                    id: DeviceId::from_instance("HID\\VID_AAAA&PID_0002\\HOST_PTR"),
+                    id: DeviceId::new(
+                        "HID\\VID_AAAA&PID_0002\\HOST_PTR",
+                        Some(r"\\?\hid#vid_aaaa&pid_0002#host_ptr".into()),
+                        Some("aaaaaaaa-0000-0000-0000-000000000001".into()),
+                    ),
                     kind: InputDeviceKind::Pointer,
                     name: "Host Pointer".into(),
                     vendor_id: Some(0xAAAA),
                     product_id: Some(0x0002),
                 },
                 InputDeviceInfo {
-                    id: DeviceId::from_instance("HID\\VID_BBBB&PID_0001\\SEAT1_KBD"),
+                    id: DeviceId::new(
+                        "HID\\VID_BBBB&PID_0001\\SEAT1_KBD",
+                        Some(r"\\?\hid#vid_bbbb&pid_0001#seat1_kbd".into()),
+                        Some("bbbbbbbb-0000-0000-0000-000000000001".into()),
+                    ),
                     kind: InputDeviceKind::Keyboard,
                     name: "Seat 1 Keyboard".into(),
                     vendor_id: Some(0xBBBB),
                     product_id: Some(0x0001),
                 },
                 InputDeviceInfo {
-                    id: DeviceId::from_instance("HID\\VID_BBBB&PID_0002\\SEAT1_PTR"),
+                    id: DeviceId::new(
+                        "HID\\VID_BBBB&PID_0002\\SEAT1_PTR",
+                        Some(r"\\?\hid#vid_bbbb&pid_0002#seat1_ptr".into()),
+                        Some("bbbbbbbb-0000-0000-0000-000000000001".into()),
+                    ),
                     kind: InputDeviceKind::Pointer,
                     name: "Seat 1 Pointer".into(),
                     vendor_id: Some(0xBBBB),
                     product_id: Some(0x0002),
                 },
                 InputDeviceInfo {
-                    id: DeviceId::from_instance("HID\\VID_CCCC&PID_0001\\SEAT2_KBD"),
+                    id: DeviceId::new(
+                        "HID\\VID_CCCC&PID_0001\\SEAT2_KBD",
+                        Some(r"\\?\hid#vid_cccc&pid_0001#seat2_kbd".into()),
+                        Some("cccccccc-0000-0000-0000-000000000001".into()),
+                    ),
                     kind: InputDeviceKind::Keyboard,
                     name: "Seat 2 Keyboard".into(),
                     vendor_id: Some(0xCCCC),
                     product_id: Some(0x0001),
                 },
                 InputDeviceInfo {
-                    id: DeviceId::from_instance("HID\\VID_CCCC&PID_0002\\SEAT2_PTR"),
+                    id: DeviceId::new(
+                        "HID\\VID_CCCC&PID_0002\\SEAT2_PTR",
+                        Some(r"\\?\hid#vid_cccc&pid_0002#seat2_ptr".into()),
+                        Some("cccccccc-0000-0000-0000-000000000001".into()),
+                    ),
                     kind: InputDeviceKind::Pointer,
                     name: "Seat 2 Pointer".into(),
                     vendor_id: Some(0xCCCC),
@@ -434,6 +458,35 @@ mod tests {
         let second = hw.snapshot().unwrap();
         assert_eq!(second.revision, 2);
         assert_eq!(hw.snapshot().unwrap().revision, 2, "cache hit after rescan");
+    }
+
+    #[test]
+    fn lab_fixture_hid_ids_carry_interface_and_container() {
+        let hw = MockHardwareEnumerator::with_lab_fixture();
+        let tree = hw.snapshot().unwrap();
+        let seat1_kbd = tree
+            .input_devices
+            .iter()
+            .find(|d| d.name == "Seat 1 Keyboard")
+            .unwrap();
+        let seat1_ptr = tree
+            .input_devices
+            .iter()
+            .find(|d| d.name == "Seat 1 Pointer")
+            .unwrap();
+        assert!(seat1_kbd.id.interface_path.is_some());
+        assert!(seat1_kbd.id.container_id.is_some());
+        // Composite kit: keyboard + pointer share container, not the same HID node.
+        assert!(!seat1_kbd.id.same_device(&seat1_ptr.id));
+        assert!(seat1_kbd.id.same_container(&seat1_ptr.id));
+
+        // After "hot-plug", same interface path still identifies the collection.
+        let resurfaced = DeviceId::new(
+            "HID\\VID_BBBB&PID_0001\\SEAT1_KBD_REOPEN",
+            seat1_kbd.id.interface_path.clone(),
+            seat1_kbd.id.container_id.clone(),
+        );
+        assert!(seat1_kbd.id.same_device(&resurfaced));
     }
 }
 
