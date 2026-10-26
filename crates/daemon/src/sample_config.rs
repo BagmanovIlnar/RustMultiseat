@@ -3,6 +3,9 @@
 use multiseat_core::{DeviceId, DisplayId, MultiseatConfig, SeatConfig, SeatId, UserSid};
 
 /// One-seat lab configuration used by CLI demos and tests.
+///
+/// Device ids intentionally use instance-only form; daemon `save`/`start` and
+/// hot-plug rematch enrich them with interface/container from the mock tree.
 pub fn lab_sample_config() -> MultiseatConfig {
     MultiseatConfig {
         seats: vec![SeatConfig {

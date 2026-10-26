@@ -51,6 +51,21 @@ impl HostHardwareEnumerator {
     pub fn is_mock(&self) -> bool {
         matches!(self, Self::Mock(_))
     }
+
+    /// Mock-only: reopen a HID device under a new instance id (hot-plug lab).
+    ///
+    /// Returns `false` when not mock or when no interface matched.
+    pub fn simulate_input_reopen(
+        &mut self,
+        interface_substr: &str,
+        new_instance: impl Into<String>,
+    ) -> bool {
+        match self {
+            Self::Mock(inner) => inner.reopen_input_instance(interface_substr, new_instance),
+            #[cfg(windows)]
+            Self::Native(_) => false,
+        }
+    }
 }
 
 impl HardwareEnumerator for HostHardwareEnumerator {

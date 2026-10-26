@@ -11,7 +11,7 @@ mod panels;
 mod tray;
 
 use clap::Parser;
-use multiseat_core::{DeviceId, DisplayId, SeatId, ServerResponse};
+use multiseat_core::{DaemonEvent, DeviceId, DisplayId, SeatId, ServerResponse};
 use multiseat_daemon::DEFAULT_BIND;
 
 use app::MultiseatApp;
@@ -37,6 +37,8 @@ pub enum Message {
     Refresh,
     /// Periodic snapshot while connected.
     TickRefresh,
+    /// Push event from a subscribed daemon connection.
+    DaemonPush(DaemonEvent),
     /// Fetch Stage 0 feasibility report.
     Feasibility,
     /// Validate draft (daemon).

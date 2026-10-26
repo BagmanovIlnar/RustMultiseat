@@ -13,9 +13,12 @@ path = "src/main.rs"
 [dependencies]
 multiseat-core = { workspace = true }
 multiseat-daemon = { workspace = true }
+multiseat-ipc = { workspace = true }
+bytes = { workspace = true }
 clap = { workspace = true }
 iced = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 # Tray is Windows-first (agent.md: one Win32 loop + channel into Iced).
 # default-features off avoids pulling GTK/libxdo on hosts that only cross-check.

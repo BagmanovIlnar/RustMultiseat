@@ -6,8 +6,8 @@ use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::window::{self, Mode};
 use iced::{Element, Length, Subscription, Task, Theme};
 use multiseat_core::{
-    ClientRequest, FeasibilityReport, HardwareTree, MultiseatConfig, SeatState, ServerResponse,
-    ValidationReport,
+    remap_config, ClientRequest, DaemonEvent, FeasibilityReport, HardwareTree, MultiseatConfig,
+    SeatState, ServerResponse, ValidationReport,
 };
 use multiseat_daemon::lab_sample_config;
 
@@ -16,7 +16,7 @@ use crate::assignment::{
     clear_seat_pointer, ensure_editable_seat, preview_validation, DragState,
 };
 use crate::config_choice::{config_for_action, ConfigSource};
-use crate::ipc::request_async;
+use crate::ipc::{event_subscription, request_async};
 use crate::panels::{device_list, feasibility_list, seat_editor, validation_list};
 use crate::tray::{self, TrayCommand};
 use crate::Message;
@@ -99,8 +99,12 @@ impl MultiseatApp {
             batch.push(tray::subscription(true).map(Message::Tray));
         }
 
-        if self.connected && !self.busy && !self.window_hidden {
-            batch.push(iced::time::every(Duration::from_secs(5)).map(|_| Message::TickRefresh));
+        if self.connected && !self.window_hidden {
+            batch.push(event_subscription(self.addr.clone()).map(Message::DaemonPush));
+            if !self.busy {
+                // Backup poll if the event worker drops; rematch still applied on Snapshot.
+                batch.push(iced::time::every(Duration::from_secs(5)).map(|_| Message::TickRefresh));
+            }
         }
 
         Subscription::batch(batch)
@@ -143,6 +147,7 @@ impl MultiseatApp {
             }
             Message::Tray(TrayCommand::Exit) => iced::exit(),
             Message::Refresh | Message::TickRefresh => self.kick(ClientRequest::GetSnapshot),
+            Message::DaemonPush(event) => self.on_daemon_event(event),
             Message::Feasibility => self.kick(ClientRequest::GetFeasibilityReport),
             Message::Validate => {
                 let (cfg, src) = config_for_action(&self.draft, &self.saved);
@@ -303,6 +308,68 @@ impl MultiseatApp {
         ensure_editable_seat(&mut self.draft);
     }
 
+    /// Rewrites draft DeviceIds against the live snapshot (keeps seat layout).
+    fn rematch_draft_to_hardware(&mut self) {
+        let report = remap_config(&self.draft, &self.hardware);
+        if report.changed() {
+            self.draft = report.config;
+            ensure_editable_seat(&mut self.draft);
+            self.refresh_preview();
+            self.status = format!(
+                "Draft rematched ({} device id(s) updated after hardware change)",
+                report.remaps.len()
+            );
+        }
+    }
+
+    fn on_daemon_event(&mut self, event: DaemonEvent) -> Task<Message> {
+        match event {
+            DaemonEvent::HardwareUpdated(tree) => {
+                self.hardware = tree;
+                // Daemon already rematched+persisted saved config; pull Snapshot
+                // so `saved` and orchestrator state stay aligned with the GUI.
+                self.rematch_draft_to_hardware();
+                self.status = format!(
+                    "HardwareUpdated rev {} — refreshing snapshot",
+                    self.hardware.revision
+                );
+                self.kick(ClientRequest::GetSnapshot)
+            }
+            DaemonEvent::SeatStateChanged { state, .. } => {
+                self.state = state;
+                self.status = format!("Seat state → {:?}", self.state);
+                Task::none()
+            }
+            DaemonEvent::AgentOnline { seat_id } => {
+                self.status = format!("Agent online seat={seat_id}");
+                Task::none()
+            }
+            DaemonEvent::AgentOffline { seat_id, reason } => {
+                self.status = format!("Agent offline seat={seat_id}: {reason}");
+                Task::none()
+            }
+            DaemonEvent::EmergencyFailOpen { reason } => {
+                self.status = format!("Emergency fail-open: {reason}");
+                Task::none()
+            }
+            DaemonEvent::Warning { code, message } => {
+                self.status = format!("Warning [{code}]: {message}");
+                Task::none()
+            }
+            DaemonEvent::OperationProgress {
+                stage,
+                detail,
+                percent,
+            } => {
+                let pct = percent
+                    .map(|p| format!(" {p}%"))
+                    .unwrap_or_default();
+                self.status = format!("Progress: {stage}{pct} — {detail}");
+                Task::none()
+            }
+        }
+    }
+
     fn kick(&mut self, request: ClientRequest) -> Task<Message> {
         if self.busy {
             return Task::none();
@@ -344,7 +411,11 @@ impl MultiseatApp {
                 self.saved = *config;
                 self.state = state;
                 if !self.draft_dirty {
+                    // Daemon already rematched+persisted `saved`.
                     self.sync_draft_from_saved();
+                } else {
+                    // Keep local layout; rewrite DeviceIds against live HW.
+                    self.rematch_draft_to_hardware();
                 }
                 let dirty = if self.draft_dirty { " · draft dirty" } else { "" };
                 self.status = format!(

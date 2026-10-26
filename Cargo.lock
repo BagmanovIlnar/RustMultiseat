@@ -1859,11 +1859,14 @@ dependencies = [
 name = "multiseat-gui"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
  "iced",
  "multiseat-core",
  "multiseat-daemon",
+ "multiseat-ipc",
  "tokio",
+ "tracing",
  "tray-icon",
 ]
 

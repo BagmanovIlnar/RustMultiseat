@@ -184,6 +184,89 @@ async fn feasibility_report_is_no_go_until_session_poc() {
 }
 
 #[tokio::test]
+async fn hotplug_rematch_updates_saved_device_ids() {
+    use std::sync::Arc;
+
+    let addr = free_addr();
+    let data_dir = unique_data_dir("hotplug-remap");
+    let state = DaemonState::mock_with_data_dir(&data_dir);
+    let bind = addr.clone();
+    let server_state = Arc::clone(&state);
+    let server = tokio::spawn(async move { run_server(&bind, server_state).await });
+
+    let mut client = None;
+    for _ in 0..50 {
+        match DaemonClient::connect(&addr).await {
+            Ok(c) => {
+                client = Some(c);
+                break;
+            }
+            Err(_) => sleep(Duration::from_millis(20)).await,
+        }
+    }
+    let mut client = client.expect("connect");
+
+    assert_eq!(
+        client
+            .request(&ClientRequest::SaveConfig(lab_sample_config()))
+            .await
+            .unwrap(),
+        ServerResponse::Ok
+    );
+
+    // Enrichment on save: instance-only lab ids → mock interface/container ids.
+    let before = client.request(&ClientRequest::GetSnapshot).await.unwrap();
+    let old_kbd = match before {
+        ServerResponse::Snapshot { config, .. } => {
+            let kbd = config.seats[0].keyboard_ids[0].clone();
+            assert!(
+                kbd.interface_path.is_some(),
+                "save rematch should attach interface_path"
+            );
+            kbd
+        }
+        other => panic!("unexpected {other:?}"),
+    };
+
+    {
+        let mut orch = state.orchestrator.lock().await;
+        assert!(
+            orch.hardware_mut().simulate_input_reopen(
+                "seat1_kbd",
+                "HID\\VID_BBBB&PID_0001\\SEAT1_KBD_REOPEN",
+            ),
+            "mock reopen should match seat1_kbd interface"
+        );
+    }
+
+    // Debounce quiet window (300ms) + poller tick (250ms).
+    sleep(Duration::from_millis(900)).await;
+
+    let after = client.request(&ClientRequest::GetSnapshot).await.unwrap();
+    match after {
+        ServerResponse::Snapshot { config, hardware, .. } => {
+            let kbd = &config.seats[0].keyboard_ids[0];
+            assert_eq!(
+                kbd.instance_id, "HID\\VID_BBBB&PID_0001\\SEAT1_KBD_REOPEN",
+                "hot-plug rematch should rewrite saved instance id"
+            );
+            assert_eq!(
+                kbd.interface_path, old_kbd.interface_path,
+                "interface path should stay stable across reopen"
+            );
+            assert!(
+                hardware.revision > 1,
+                "hardware revision should advance after reopen"
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    server.abort();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
 async fn session_agent_hello_heartbeat_and_fail_open() {
     let addr = free_addr();
     let data_dir = unique_data_dir("agent");

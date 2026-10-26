@@ -218,6 +218,36 @@ impl MockHardwareEnumerator {
         self.cache.gate().signal();
     }
 
+    /// Simulates Windows reopening a HID collection with a new instance id.
+    ///
+    /// Keeps `interface_path` / `container_id` so [`multiseat_core::remap_config`]
+    /// can rematch seat assignments after hot-plug.
+    pub fn reopen_input_instance(
+        &mut self,
+        interface_substr: &str,
+        new_instance: impl Into<String>,
+    ) -> bool {
+        let needle = interface_substr.to_ascii_lowercase();
+        let new_instance = new_instance.into().to_ascii_uppercase();
+        let mut found = false;
+        for device in &mut self.tree.input_devices {
+            let matches = device
+                .id
+                .interface_path
+                .as_ref()
+                .is_some_and(|p| p.to_ascii_lowercase().contains(&needle));
+            if matches {
+                device.id.instance_id = new_instance;
+                found = true;
+                break;
+            }
+        }
+        if found {
+            self.bump_revision();
+        }
+        found
+    }
+
     /// Whether notifications were started (tests).
     pub fn notifications_enabled(&self) -> bool {
         self.notifications
