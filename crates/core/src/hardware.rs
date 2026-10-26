@@ -123,9 +123,9 @@ impl HardwareTree {
         }
     }
 
-    /// Returns true when the tree contains the device.
+    /// Returns true when the tree contains the device (exact or [`DeviceId::same_device`]).
     pub fn contains_device(&self, id: &DeviceId) -> bool {
-        self.input_devices.iter().any(|d| &d.id == id)
+        self.resolve_input(id).is_some()
     }
 
     /// Returns true when the tree contains the display.
@@ -133,8 +133,20 @@ impl HardwareTree {
         self.displays.iter().any(|d| &d.id == id)
     }
 
-    /// Finds an input device by id.
+    /// Finds an input device by exact id equality.
     pub fn input_device(&self, id: &DeviceId) -> Option<&InputDeviceInfo> {
         self.input_devices.iter().find(|d| &d.id == id)
+    }
+
+    /// Resolves a configured id against the live snapshot.
+    ///
+    /// Order: [`DeviceId::same_device`] (instance / interface path), then
+    /// [`DeviceId::same_container`] (composite kit; first match of any kind).
+    /// Prefer [`crate::remap::remap_config`] when kind-aware claiming is needed.
+    pub fn resolve_input(&self, id: &DeviceId) -> Option<&InputDeviceInfo> {
+        self.input_devices
+            .iter()
+            .find(|d| id.same_device(&d.id))
+            .or_else(|| self.input_devices.iter().find(|d| id.same_container(&d.id)))
     }
 }

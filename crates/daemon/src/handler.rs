@@ -227,6 +227,17 @@ impl DaemonState {
                             continue;
                         }
                         last_published = Some(tree.revision);
+                        let remap = orch.apply_hardware_remap(&tree);
+                        if remap.changed() {
+                            info!(
+                                remaps = remap.remaps.len(),
+                                unresolved = remap.unresolved.len(),
+                                "seat config rematched after hot-plug"
+                            );
+                            if let Err(err) = state.config_store.save(orch.config()) {
+                                warn!(error = %err, "failed to persist rematched configuration");
+                            }
+                        }
                         info!(
                             revision = tree.revision,
                             gpus = tree.gpus.len(),
@@ -320,9 +331,10 @@ impl DaemonState {
             }
             ClientRequest::SaveConfig(config) => {
                 let mut orch = self.orchestrator.lock().await;
-                match orch.save_config(config.clone()) {
+                match orch.save_config(config) {
                     Ok(()) => {
-                        if let Err(err) = self.config_store.save(&config) {
+                        // Persist rematched ids (instance/interface/container from live HW).
+                        if let Err(err) = self.config_store.save(orch.config()) {
                             warn!(error = %err, "failed to persist saved configuration");
                             ServerResponse::Err(ProtocolError::Application {
                                 message: err.to_string(),

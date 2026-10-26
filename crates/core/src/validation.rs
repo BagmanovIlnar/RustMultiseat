@@ -102,14 +102,15 @@ pub fn validate_config(config: &MultiseatConfig, hardware: &HardwareTree) -> Val
     }
 
     let mut seat_ids = HashSet::new();
-    let mut used_devices: HashSet<&DeviceId> = HashSet::new();
+    // Track resolved hardware instance ids so rematched aliases still conflict.
+    let mut used_devices: HashSet<String> = HashSet::new();
     let mut used_displays = HashSet::new();
 
     if let Some(kbd) = &config.emergency_keyboard {
-        used_devices.insert(kbd);
+        claim_resolved(&mut used_devices, hardware, kbd);
     }
     if let Some(ptr) = &config.emergency_pointer {
-        used_devices.insert(ptr);
+        claim_resolved(&mut used_devices, hardware, ptr);
     }
 
     for seat in &enabled {
@@ -163,7 +164,7 @@ pub fn validate_config(config: &MultiseatConfig, hardware: &HardwareTree) -> Val
                 InputDeviceKind::Keyboard,
                 &format!("seat_{}_keyboard", seat.id.0),
             );
-            if !used_devices.insert(kbd) {
+            if !claim_resolved(&mut used_devices, hardware, kbd) {
                 report.error(
                     "device_conflict",
                     format!("device {} assigned more than once", kbd),
@@ -179,7 +180,7 @@ pub fn validate_config(config: &MultiseatConfig, hardware: &HardwareTree) -> Val
                 InputDeviceKind::Pointer,
                 &format!("seat_{}_pointer", seat.id.0),
             );
-            if !used_devices.insert(ptr) {
+            if !claim_resolved(&mut used_devices, hardware, ptr) {
                 report.error(
                     "device_conflict",
                     format!("device {} assigned more than once", ptr),
@@ -210,6 +211,18 @@ pub fn validate_config(config: &MultiseatConfig, hardware: &HardwareTree) -> Val
     report
 }
 
+fn claim_resolved(
+    used: &mut HashSet<String>,
+    hardware: &HardwareTree,
+    configured: &DeviceId,
+) -> bool {
+    let key = hardware
+        .resolve_input(configured)
+        .map(|d| d.id.instance_id.clone())
+        .unwrap_or_else(|| configured.instance_id.clone());
+    used.insert(key)
+}
+
 fn check_input_kind(
     report: &mut ValidationReport,
     hardware: &HardwareTree,
@@ -217,7 +230,7 @@ fn check_input_kind(
     expected: InputDeviceKind,
     context: &str,
 ) {
-    match hardware.input_device(id) {
+    match hardware.resolve_input(id) {
         None => report.error(
             "unknown_device",
             format!("{context}: device {id} not found in hardware snapshot"),
@@ -342,5 +355,26 @@ mod tests {
         cfg.seats[0].keyboard_ids = vec![DeviceId::from_instance("kbd-host")];
         let report = validate_config(&cfg, &sample_hardware());
         assert!(report.issues.iter().any(|i| i.code == "device_conflict"));
+    }
+
+    #[test]
+    fn accepts_device_matched_by_interface_path() {
+        let mut hardware = sample_hardware();
+        hardware.input_devices[2].id = DeviceId::new(
+            "kbd-1-new-instance",
+            Some(r"\\?\hid#seat1_kbd".into()),
+            Some("bbbbbbbb-0000-0000-0000-000000000001".into()),
+        );
+        let mut cfg = valid_config();
+        cfg.seats[0].keyboard_ids = vec![DeviceId::new(
+            "kbd-1-old-instance",
+            Some(r"\\?\HID#SEAT1_KBD".into()),
+            Some("bbbbbbbb-0000-0000-0000-000000000001".into()),
+        )];
+        let report = validate_config(&cfg, &hardware);
+        assert!(
+            !report.issues.iter().any(|i| i.code == "unknown_device"),
+            "{report:?}"
+        );
     }
 }

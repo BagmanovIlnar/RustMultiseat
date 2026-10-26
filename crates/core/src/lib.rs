@@ -14,6 +14,7 @@ pub mod ipc;
 pub mod journal;
 pub mod orchestrator;
 pub mod protocol;
+pub mod remap;
 pub mod seat;
 pub mod traits;
 pub mod validation;
@@ -35,6 +36,7 @@ pub use journal::{
 };
 pub use orchestrator::SeatOrchestrator;
 pub use protocol::{PROTOCOL_MAGIC, PROTOCOL_VERSION};
+pub use remap::{remap_config, DeviceRemap, RemapReport};
 pub use seat::{MultiseatConfig, SeatConfig, SeatState};
 pub use traits::{
     BackendHealth, DisplayBackend, DisplayCapabilities, HardwareEnumerator, InputAssignments,

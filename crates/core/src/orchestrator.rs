@@ -1,7 +1,9 @@
 //! Transactional seat start/stop orchestration.
 
 use crate::error::{CoreError, CoreResult};
+use crate::hardware::HardwareTree;
 use crate::journal::{JournalEntry, OperationJournal};
+use crate::remap::{remap_config, RemapReport};
 use crate::seat::{MultiseatConfig, SeatState};
 use crate::traits::{
     DisplayBackend, HardwareEnumerator, InputAssignments, InputRouter, SessionBackend,
@@ -82,19 +84,37 @@ where
     }
 
     /// Validates configuration against the current hardware snapshot.
+    ///
+    /// Device ids are rematched (`same_device` / `same_container`) before
+    /// validation so hot-plug instance churn does not spuriously fail.
     pub fn validate_config(&self, config: &MultiseatConfig) -> CoreResult<ValidationReport> {
         let hardware = self.hardware.snapshot()?;
-        let report = validate_config(config, &hardware);
+        let remapped = remap_config(config, &hardware);
+        let report = validate_config(&remapped.config, &hardware);
         if report.has_errors() {
             return Err(CoreError::Validation(report.clone()));
         }
         Ok(report)
     }
 
-    /// Persists a previously validated configuration.
+    /// Rematches the saved config against `hardware` and updates it in memory.
+    pub fn apply_hardware_remap(&mut self, hardware: &HardwareTree) -> RemapReport {
+        let report = remap_config(&self.config, hardware);
+        if report.changed() {
+            self.config = report.config.clone();
+        }
+        report
+    }
+
+    /// Persists a previously validated configuration (rematched to live hardware).
     pub fn save_config(&mut self, config: MultiseatConfig) -> CoreResult<()> {
-        let _ = self.validate_config(&config)?;
-        self.config = config;
+        let hardware = self.hardware.snapshot()?;
+        let remapped = remap_config(&config, &hardware);
+        let report = validate_config(&remapped.config, &hardware);
+        if report.has_errors() {
+            return Err(CoreError::Validation(report));
+        }
+        self.config = remapped.config;
         Ok(())
     }
 
@@ -111,7 +131,19 @@ where
         }
 
         self.state = SeatState::Validating;
-        if let Err(err) = self.validate_config(&config) {
+        let hardware_for_remap = match self.hardware.snapshot() {
+            Ok(tree) => tree,
+            Err(err) => {
+                self.state = SeatState::Failed {
+                    error: err.to_string(),
+                };
+                return Err(err);
+            }
+        };
+        let config = remap_config(&config, &hardware_for_remap).config;
+        let report = validate_config(&config, &hardware_for_remap);
+        if report.has_errors() {
+            let err = CoreError::Validation(report);
             self.state = SeatState::Failed {
                 error: err.to_string(),
             };
