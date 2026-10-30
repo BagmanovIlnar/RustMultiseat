@@ -470,10 +470,17 @@ Windows Server/RDS, отдельная VM на seat или multiseat в одно
 
 Статус: 🟡 частично. Реализованы: workspace, закрепленный toolchain/lockfile,
 модели, traits, state machine, validation, orchestrator, remap, unit-тесты;
-CI (fmt/clippy/test на ubuntu/windows/macos). Не реализовано: CI-матрица
-Windows 7/8.1 и воспроизводимый эксперимент со сборкой под
-`x86_64-win7-windows-msvc` (build-std), проверка минимальных OS imports
-бинарников.
+CI (fmt/clippy/test на ubuntu/windows/macos). Эксперимент win7-target:
+добавлен CI-job `win7-buildstd` (pinned nightly-2026-10-29 + rust-src +
+`-Z build-std`, target `x86_64-win7-windows-msvc`) с check/build user-mode
+крейтов, нижней границей импортов (запрет Win8+ shim
+`api-ms-win-core-synch-l1-2-0.dll`) и выгрузкой .exe как артефактов;
+локальное воспроизведение — `scripts/win7_buildstd_check.sh` (check
+работает на любом хосте). Job помечен `continue-on-error` до первого
+устойчиво зеленого прогона — после этого способ закрепляется как
+обязательный. Не реализовано: обязательная матрица Windows 7/8.1
+(требует self-hosted EOL-машины), полная сверка OS imports на реальной
+Windows 7.
 
 - Зафиксировать toolchains и lockfile.
 - Реализовать модели, traits, state machine и unit-тесты.

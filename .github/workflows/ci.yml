@@ -49,11 +49,83 @@ jobs:
           test -f installer/artifacts/ci-win11/install-plan.json
           test -f installer/artifacts/ci-win7/INSTALL_PLAN.md
 
-  # Windows 7/8.1 runners are not available on GitHub-hosted CI.
-  # Stage 0/legacy coverage must use isolated self-hosted lab machines.
+  # Этап 1 (agent.md §2/§9): воспроизводимая сборка user-mode компонентов
+  # под Tier-3 target x86_64-win7-windows-msvc (нижняя граница Windows 7 SP1).
+  # Пайплайн: закрепленный nightly + rust-src + `-Z build-std` (std из исходников).
+  # Пока ЭКСПЕРИМЕНТ (continue-on-error): после первого устойчиво зеленого
+  # прогона закрепить дату nightly, снять флаг и сделать обязательным —
+  # «способ фиксируется только после воспроизводимого CI-эксперимента».
+  # Локальное воспроизведение: scripts/win7_buildstd_check.sh (check без линковки
+  # работает и на macOS/Linux; полный build — только на Windows с MSVC).
+  win7-buildstd:
+    name: win7 target (build-std experiment)
+    runs-on: windows-latest
+    continue-on-error: true
+    env:
+      # Перекрывает rust-toolchain.toml (1.99.0) внутри checkout’а.
+      RUSTUP_TOOLCHAIN: nightly-2026-10-29
+      # Глобальный -D warnings не должен применяться к std, собираемому из исходников.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-29
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix: win7-buildstd
+      - name: Report toolchain
+        run: rustc -V && cargo -V
+      - name: cargo check user-mode crates (win7 target)
+        run: >
+          cargo check -Z build-std --target x86_64-win7-windows-msvc
+          -p multiseat-core -p multiseat-ipc -p multiseat-platform-windows
+          -p multiseat-daemon -p multiseat-session-agent
+      - name: Build release binaries (win7 target)
+        run: >
+          cargo build --release -Z build-std --target x86_64-win7-windows-msvc
+          -p multiseat-daemon -p multiseat-session-agent
+      - name: PE imports lower-bound check (Win7)
+        # План §9 (этап 1): «проверять минимальные OS imports готовых бинарников».
+        # Нижняя граница: запрет известного Win8+ shim api-ms-win-core-synch-l1-2-0.dll
+        # (появляется при SRWLOCK-примитивах синхронизации и ломает загрузку на Win7).
+        # Полная сверка импортов — задача лаборатории на реальной Win7.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vc = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $dumpbin = Get-ChildItem "$vc\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          $exes = Get-ChildItem target\x86_64-win7-windows-msvc\release\*.exe
+          $bad = @()
+          foreach ($exe in $exes) {
+            $dlls = & $dumpbin /DEPENDENTS $exe.FullName |
+              Select-String -Pattern '^\s+([A-Za-z0-9_.\-]+\.dll)' -AllMatches |
+              ForEach-Object { $_.Matches[0].Groups[1].Value.ToLowerInvariant() } |
+              Sort-Object -Unique
+            Write-Host "== $($exe.Name) imports: $($dlls -join ', ')"
+            foreach ($d in $dlls) {
+              if ($d -eq 'api-ms-win-core-synch-l1-2-0.dll') { $bad += "$($exe.Name) -> $d" }
+            }
+          }
+          if ($bad.Count -gt 0) { Write-Error ("Win8+ imports found: " + ($bad -join ', ')) }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: win7-buildstd-binaries
+          if-no-files-found: warn
+          path: |
+            target/x86_64-win7-windows-msvc/release/multiseat-daemon.exe
+            target/x86_64-win7-windows-msvc/release/multiseat-session-agent.exe
+
+  # Windows 7/8.1 RUNNERS (сами ОС) недоступны на GitHub-hosted CI:
+  # Stage 0/legacy тесты на живых EOL-системах — только изолированные
+  # self-hosted машины без доступа из недоверенных PR.
   note-legacy:
     name: legacy-os-note
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "Windows 7/8.1 builds require self-hosted runners (see agent.md Stage 1)."
+          echo "Windows 7/8.1 runtime coverage requires self-hosted runners (see agent.md Stage 1);"
+          echo "cross-build for the win7 target is covered by the win7-buildstd experiment job."
