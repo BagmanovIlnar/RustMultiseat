@@ -16,6 +16,20 @@ use crate::debounce::DebounceGate;
 use crate::inventory::SnapshotCache;
 use crate::session::{require_agent, spawn_session_agent, stop_agent_child};
 
+/// Env var selecting a mock backend failure stage for fault-injection tests
+/// and lab runs: `session_create` / `agent_start` / `display_prepare` /
+/// `display_attach` / `input_apply`.
+pub const MOCK_FAIL_STAGE_ENV: &str = "MULTISEAT_MOCK_FAIL_STAGE";
+
+/// True when [`MOCK_FAIL_STAGE_ENV`] currently selects `stage`.
+fn mock_fail_stage_is(stage: &str) -> bool {
+    std::env::var_os(MOCK_FAIL_STAGE_ENV).is_some_and(|v| v == stage)
+}
+
+fn mock_fail_stage_err(stage: &'static str) -> CoreError {
+    CoreError::Backend(format!("mock fail stage: {stage}"))
+}
+
 /// In-memory hardware enumerator with a fixed lab topology.
 ///
 /// Hot-plug simulation: [`Self::bump_revision`] signals the debounce gate;
@@ -372,6 +386,9 @@ impl SessionBackend for MockSessionBackend {
         if !self.probe_ok {
             return Err(CoreError::Backend("session backend disabled".into()));
         }
+        if mock_fail_stage_is("session_create") {
+            return Err(mock_fail_stage_err("session_create"));
+        }
         self.next_id += 1;
         let session_id = SessionId(self.next_id);
         self.sessions.insert(seat.id, session_id);
@@ -384,6 +401,9 @@ impl SessionBackend for MockSessionBackend {
     fn start_agent(&mut self, session: &SessionHandle) -> CoreResult<()> {
         if !self.sessions.contains_key(&session.seat_id) {
             return Err(CoreError::Backend("unknown session".into()));
+        }
+        if mock_fail_stage_is("agent_start") {
+            return Err(mock_fail_stage_err("agent_start"));
         }
         if let Some(mut prev) = self.agents.remove(&session.seat_id) {
             stop_agent_child(&mut prev);
@@ -472,6 +492,43 @@ mod tests {
     }
 
     #[test]
+    fn fail_stage_env_injects_backend_errors() {
+        let _env = crate::test_env::lock();
+        let seat = sample_seat();
+
+        std::env::set_var(MOCK_FAIL_STAGE_ENV, "session_create");
+        let mut sessions = MockSessionBackend::available();
+        assert!(sessions.create_or_connect(&seat).is_err());
+
+        std::env::set_var(MOCK_FAIL_STAGE_ENV, "agent_start");
+        let session = sessions.create_or_connect(&seat).unwrap();
+        let err = sessions.start_agent(&session).unwrap_err();
+        assert!(err.to_string().contains("agent_start"));
+
+        std::env::set_var(MOCK_FAIL_STAGE_ENV, "display_prepare");
+        let mut displays = MockDisplayBackend::default();
+        assert!(displays.prepare(&[seat.clone()]).is_err());
+
+        std::env::set_var(MOCK_FAIL_STAGE_ENV, "display_attach");
+        let session = sessions.create_or_connect(&seat).unwrap();
+        assert!(displays.attach(&seat, &session).is_err());
+
+        std::env::set_var(MOCK_FAIL_STAGE_ENV, "input_apply");
+        let mut router = MockInputRouter::default();
+        let assignments = InputAssignments {
+            config: multiseat_core::MultiseatConfig::default(),
+        };
+        let err = router.apply(&assignments).unwrap_err();
+        assert!(err.to_string().contains("input_apply"));
+        // Sticky fail-open is NOT engaged by the injected stage failure.
+        assert!(!router.is_fail_open());
+
+        std::env::remove_var(MOCK_FAIL_STAGE_ENV);
+        let session = sessions.create_or_connect(&seat).unwrap();
+        assert!(displays.attach(&seat, &session).is_ok());
+    }
+
+    #[test]
     fn hotplug_signal_debounces_then_rescans_with_new_revision() {
         let mut hw = MockHardwareEnumerator::with_lab_fixture();
         // Short window for the test: rebuild enumerator with fast gate via bump path.
@@ -538,10 +595,16 @@ impl DisplayBackend for MockDisplayBackend {
         if seats.is_empty() {
             return Err(CoreError::Backend("no seats to prepare".into()));
         }
+        if mock_fail_stage_is("display_prepare") {
+            return Err(mock_fail_stage_err("display_prepare"));
+        }
         Ok(())
     }
 
     fn attach(&mut self, seat: &SeatConfig, _session: &SessionHandle) -> CoreResult<RollbackToken> {
+        if mock_fail_stage_is("display_attach") {
+            return Err(mock_fail_stage_err("display_attach"));
+        }
         let token = RollbackToken::new(format!("display-{}", seat.id));
         self.attached.insert(seat.id, token.clone());
         Ok(token)
@@ -595,6 +658,9 @@ impl InputRouter for MockInputRouter {
     }
 
     fn apply(&mut self, assignments: &InputAssignments) -> CoreResult<RollbackToken> {
+        if mock_fail_stage_is("input_apply") {
+            return Err(mock_fail_stage_err("input_apply"));
+        }
         if self.fail_open {
             return Err(CoreError::Backend("router in fail-open".into()));
         }

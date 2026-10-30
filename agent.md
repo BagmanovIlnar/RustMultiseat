@@ -520,9 +520,9 @@ Display: только probe + soft bookkeeping attach; IddCx/WDDM-legacy/win7-le
 ### Этап 5. Orchestrator
 
 Статус: ✅ реализован (на mock/soft backends). validate/start/stop/rollback/
-recover, транзакционный журнал, запрет `Active` без heartbeat, fault-пути
-покрыты тестами. Полная fault-injection suite по каждому переходу
-(timeout/disconnect/partial apply/corrupted journal) еще не написана.
+recover, транзакционный журнал, запрет `Active` без heartbeat; fault-пути
+покрыты юнит-тестами (сбой на каждом шаге + порядок компенсаций) и
+fault-injection интеграционными тестами через IPC.
 
 - Реализовать validation, transaction journal, start/stop/rollback/recover.
 - Проверить fault injection на каждом переходе.
@@ -561,10 +561,15 @@ point, offline rollback из WinRE.
 
 Статус: 🟡 частично. Есть: unit (модели/validation/state/rollback), fuzz
 (IPC decoder), integration daemon-roundtrip (снапшоты, watchdog, fail-open,
-hot-plug rematch, journal recovery), smoke-скрипты. Не реализовано:
-полная fault-injection suite в `tests/integration` (timeout, disconnect,
-partial apply, corrupted journal), compatibility-проверки на минимальных
-целевых ОС и аппаратные лабораторные прогоны.
+hot-plug rematch, journal recovery), fault-injection suite
+(`crates/daemon/tests/fault_injection.rs` + env-инъекции
+`MULTISEAT_MOCK_FAIL_STAGE` в mock-бэкендах): partial apply на каждом шаге
+транзакции (session_create / agent_start / display_prepare / display_attach /
+input_apply) с rollback в обратном порядке и повторным стартом после снятия
+неисправности, corrupted journal (мусор / обрезка / чужая схема версии) с
+безопасным бутом, обрыв клиента в Active, IPC timeout. Не реализовано:
+compatibility-проверки на минимальных целевых ОС и аппаратные
+лабораторные прогоны.
 
 ### Автоматические тесты
 

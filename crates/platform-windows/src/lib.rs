@@ -36,7 +36,10 @@ pub use input::{
     RMS_IF_ROUTE_F_SUPPRESS_HOST, RMS_IF_TABLE_F_REPLACE_ALL,
 };
 pub use inventory::{prefer_native, probe_capabilities, SnapshotCache, WindowsHardwareEnumerator};
-pub use mock::{MockDisplayBackend, MockHardwareEnumerator, MockInputRouter, MockSessionBackend};
+pub use mock::{
+    MockDisplayBackend, MockHardwareEnumerator, MockInputRouter, MockSessionBackend,
+    MOCK_FAIL_STAGE_ENV,
+};
 pub use poc_status::{input_soft_apply_enabled, NativePocStatus};
 pub use probe::{detect_capabilities, windows_version_numbers};
 pub use session::{
