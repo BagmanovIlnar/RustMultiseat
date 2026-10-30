@@ -48,11 +48,7 @@ pub fn windows_version_numbers() -> Option<(u32, u32, u32)> {
             };
             let as_osvi = &mut info as *mut OSVERSIONINFOEXW as *mut OSVERSIONINFOW;
             if GetVersionExW(as_osvi).is_ok() {
-                return Some((
-                    info.dwMajorVersion,
-                    info.dwMinorVersion,
-                    info.dwBuildNumber,
-                ));
+                return Some((info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber));
             }
         }
         None

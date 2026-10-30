@@ -6,7 +6,9 @@ mod probe;
 
 pub use backend::WindowsDisplayBackend;
 pub use host::HostDisplayBackend;
-pub use probe::probe_display;
+pub use probe::{
+    display_candidate_for_os_version, probe_display, DISPLAY_ATTACH_ENV, DISPLAY_BACKEND_ENV,
+};
 
 #[cfg(test)]
 mod tests {
@@ -19,10 +21,7 @@ mod tests {
         assert!(!result.detail().is_empty());
         assert!(matches!(
             result.status,
-            CheckStatus::Pass
-                | CheckStatus::Blocked
-                | CheckStatus::Unknown
-                | CheckStatus::Fail
+            CheckStatus::Pass | CheckStatus::Blocked | CheckStatus::Unknown | CheckStatus::Fail
         ));
     }
 }

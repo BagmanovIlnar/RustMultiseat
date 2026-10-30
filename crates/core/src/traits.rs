@@ -88,6 +88,13 @@ pub trait InputRouter {
 
     /// Returns driver heartbeat / queue health.
     fn health(&self) -> CoreResult<BackendHealth>;
+
+    /// Immediately clears active routes (emergency fail-open).
+    ///
+    /// Default is a no-op; journal rollback remains the primary compensation path.
+    /// Implementations should clear in-memory routes without permanently disabling
+    /// the router (so a later Start can succeed).
+    fn force_fail_open(&mut self) {}
 }
 
 /// Attaches displays to sessions (experimental per-OS backends).

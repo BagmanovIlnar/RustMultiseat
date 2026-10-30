@@ -1,11 +1,13 @@
 //! Minimal Iced dashboard for RustMultiseat.
 //!
-//! Stage 6: live IPC, click-DnD seat assignment, validation preview, and
-//! Windows system tray (hide-on-close + Show/Exit).
+//! Stage 6: live IPC, pointer drag-and-drop seat assignment with canvas
+//! preview and Esc-cancel, validation preview, and Windows system tray
+//! (hide-on-close + Show/Exit).
 
 mod app;
 mod assignment;
 mod config_choice;
+mod dnd;
 mod ipc;
 mod panels;
 mod tray;
@@ -51,9 +53,9 @@ pub enum Message {
     Stop,
     /// Acknowledge emergency fail-open alert.
     AckEmergency,
-    /// Pick a hardware item (drag start).
+    /// Pick a hardware item (press starts a drag session).
     DragStarted(Assignable),
-    /// Cancel current pick.
+    /// Cancel current drag (Esc or Cancel button).
     CancelDrag,
     /// Drop picked item onto a seat.
     DroppedOnSeat(SeatId),

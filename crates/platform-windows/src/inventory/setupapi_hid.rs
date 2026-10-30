@@ -10,8 +10,8 @@ use windows::core::GUID;
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiEnumDeviceInterfaces,
     SetupDiGetClassDevsW, SetupDiGetDeviceInstanceIdW, SetupDiGetDeviceInterfaceDetailW,
-    SetupDiGetDeviceRegistryPropertyW, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, SPDRP_BASE_CONTAINERID,
-    SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME, SP_DEVICE_INTERFACE_DATA,
+    SetupDiGetDeviceRegistryPropertyW, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT,
+    SPDRP_BASE_CONTAINERID, SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME, SP_DEVICE_INTERFACE_DATA,
     SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,
 };
 use windows::Win32::Devices::HumanInterfaceDevice::GUID_DEVINTERFACE_HID;
@@ -198,17 +198,14 @@ unsafe fn interface_path_and_devinfo(
 
     let mut buf = vec![0u8; required.max(8) as usize];
     let detail = buf.as_mut_ptr().cast::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>();
-    (*detail).cbSize = if cfg!(target_pointer_width = "64") { 8 } else { 6 };
+    (*detail).cbSize = if cfg!(target_pointer_width = "64") {
+        8
+    } else {
+        6
+    };
 
-    SetupDiGetDeviceInterfaceDetailW(
-        list,
-        iface,
-        Some(detail),
-        required,
-        None,
-        Some(&mut info),
-    )
-    .map_err(|e| CoreError::Backend(format!("SetupDiGetDeviceInterfaceDetailW failed: {e}")))?;
+    SetupDiGetDeviceInterfaceDetailW(list, iface, Some(detail), required, None, Some(&mut info))
+        .map_err(|e| CoreError::Backend(format!("SetupDiGetDeviceInterfaceDetailW failed: {e}")))?;
 
     Ok((read_device_path(detail), info))
 }
@@ -240,11 +237,7 @@ fn classify_hid(row: HidRow) -> Option<InputDeviceInfo> {
 
     let (vendor_id, product_id) = parse_vid_pid(&row.instance_id);
     Some(InputDeviceInfo {
-        id: DeviceId::new(
-            row.instance_id,
-            Some(row.interface_path),
-            row.container_id,
-        ),
+        id: DeviceId::new(row.instance_id, Some(row.interface_path), row.container_id),
         kind,
         name: row.friendly_name,
         vendor_id,

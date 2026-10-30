@@ -3,8 +3,10 @@
 use std::net::TcpListener;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use multiseat_core::{ClientRequest, SeatId, SeatState, ServerResponse};
-use multiseat_daemon::{lab_sample_config, run_server, DaemonClient, DaemonState};
+use multiseat_core::{ClientRequest, DaemonEvent, SeatId, SeatState, ServerResponse};
+use multiseat_daemon::{
+    lab_sample_config, run_server, set_inject_unhealthy, DaemonClient, DaemonState,
+};
 use tokio::time::{sleep, Duration};
 
 fn free_addr() -> String {
@@ -231,10 +233,8 @@ async fn hotplug_rematch_updates_saved_device_ids() {
     {
         let mut orch = state.orchestrator.lock().await;
         assert!(
-            orch.hardware_mut().simulate_input_reopen(
-                "seat1_kbd",
-                "HID\\VID_BBBB&PID_0001\\SEAT1_KBD_REOPEN",
-            ),
+            orch.hardware_mut()
+                .simulate_input_reopen("seat1_kbd", "HID\\VID_BBBB&PID_0001\\SEAT1_KBD_REOPEN",),
             "mock reopen should match seat1_kbd interface"
         );
     }
@@ -244,7 +244,9 @@ async fn hotplug_rematch_updates_saved_device_ids() {
 
     let after = client.request(&ClientRequest::GetSnapshot).await.unwrap();
     match after {
-        ServerResponse::Snapshot { config, hardware, .. } => {
+        ServerResponse::Snapshot {
+            config, hardware, ..
+        } => {
             let kbd = &config.seats[0].keyboard_ids[0];
             assert_eq!(
                 kbd.instance_id, "HID\\VID_BBBB&PID_0001\\SEAT1_KBD_REOPEN",
@@ -305,9 +307,7 @@ async fn session_agent_hello_heartbeat_and_fail_open() {
     }
 
     let beat = client
-        .request(&ClientRequest::AgentHeartbeat {
-            seat_id: SeatId(1),
-        })
+        .request(&ClientRequest::AgentHeartbeat { seat_id: SeatId(1) })
         .await
         .unwrap();
     assert_eq!(beat, ServerResponse::Ok);
@@ -331,6 +331,158 @@ async fn session_agent_hello_heartbeat_and_fail_open() {
         ServerResponse::Snapshot { state, .. } => assert_eq!(state, SeatState::Idle),
         other => panic!("unexpected {other:?}"),
     }
+
+    server.abort();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn agent_heartbeat_timeout_triggers_fail_open() {
+    let addr = free_addr();
+    let data_dir = unique_data_dir("agent-watchdog");
+    // Heartbeat 50ms, death after 150ms; watchdog ticks every 100ms.
+    let state = DaemonState::mock_with_agent_timeouts(
+        &data_dir,
+        Duration::from_millis(50),
+        Duration::from_millis(150),
+    );
+    let mut events = state.events.subscribe();
+    let bind = addr.clone();
+    let server = tokio::spawn(async move { run_server(&bind, state).await });
+
+    let mut client = None;
+    for _ in 0..50 {
+        match DaemonClient::connect(&addr).await {
+            Ok(c) => {
+                client = Some(c);
+                break;
+            }
+            Err(_) => sleep(Duration::from_millis(20)).await,
+        }
+    }
+    let mut client = client.expect("connect");
+
+    let _ = client
+        .request(&ClientRequest::Start(lab_sample_config()))
+        .await
+        .unwrap();
+    let snap = client.request(&ClientRequest::GetSnapshot).await.unwrap();
+    match snap {
+        ServerResponse::Snapshot { state, .. } => assert_eq!(state, SeatState::Active),
+        other => panic!("unexpected {other:?}"),
+    }
+
+    let ack = client
+        .request(&ClientRequest::AgentHello {
+            seat_id: SeatId(1),
+            agent_version: 1,
+        })
+        .await
+        .unwrap();
+    match ack {
+        ServerResponse::AgentAck {
+            heartbeat_interval_ms,
+            ..
+        } => assert_eq!(heartbeat_interval_ms, 50),
+        other => panic!("unexpected {other:?}"),
+    }
+    // Deliberately skip heartbeats; wait for watchdog reap + stop.
+    sleep(Duration::from_millis(500)).await;
+
+    let mut saw_emergency = false;
+    let mut saw_offline = false;
+    while let Ok(ev) = events.try_recv() {
+        match ev {
+            DaemonEvent::EmergencyFailOpen { reason } => {
+                assert!(reason.contains("heartbeat timeout"));
+                saw_emergency = true;
+            }
+            DaemonEvent::AgentOffline { seat_id, reason } => {
+                assert_eq!(seat_id, SeatId(1));
+                assert!(reason.contains("heartbeat"));
+                saw_offline = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_offline, "expected AgentOffline from watchdog");
+    assert!(saw_emergency, "expected EmergencyFailOpen from watchdog");
+
+    let snapshot = client.request(&ClientRequest::GetSnapshot).await.unwrap();
+    match snapshot {
+        ServerResponse::Snapshot { state, .. } => assert_eq!(state, SeatState::Idle),
+        other => panic!("unexpected {other:?}"),
+    }
+
+    // Start must succeed again after non-sticky force_fail_open.
+    let restart = client
+        .request(&ClientRequest::Start(lab_sample_config()))
+        .await
+        .unwrap();
+    assert_eq!(restart, ServerResponse::Ok);
+
+    server.abort();
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn filter_watchdog_unhealthy_triggers_fail_open() {
+    let addr = free_addr();
+    let data_dir = unique_data_dir("filter-watchdog");
+    let state = DaemonState::mock_with_data_dir(&data_dir);
+    let mut events = state.events.subscribe();
+    let bind = addr.clone();
+    let server = tokio::spawn(async move { run_server(&bind, state).await });
+
+    let mut client = None;
+    for _ in 0..50 {
+        match DaemonClient::connect(&addr).await {
+            Ok(c) => {
+                client = Some(c);
+                break;
+            }
+            Err(_) => sleep(Duration::from_millis(20)).await,
+        }
+    }
+    let mut client = client.expect("connect");
+
+    let start = client
+        .request(&ClientRequest::Start(lab_sample_config()))
+        .await
+        .unwrap();
+    assert_eq!(start, ServerResponse::Ok);
+
+    // Inject after Active so the watchdog is armed, then wait for a tick.
+    set_inject_unhealthy(true);
+    sleep(Duration::from_millis(600)).await;
+
+    let mut saw_emergency = false;
+    while let Ok(ev) = events.try_recv() {
+        if let DaemonEvent::EmergencyFailOpen { reason } = ev {
+            assert!(
+                reason.contains("input filter"),
+                "unexpected reason: {reason}"
+            );
+            saw_emergency = true;
+        }
+    }
+    set_inject_unhealthy(false);
+    assert!(
+        saw_emergency,
+        "expected EmergencyFailOpen from filter watchdog"
+    );
+
+    let snapshot = client.request(&ClientRequest::GetSnapshot).await.unwrap();
+    match snapshot {
+        ServerResponse::Snapshot { state, .. } => assert_eq!(state, SeatState::Idle),
+        other => panic!("unexpected {other:?}"),
+    }
+
+    let restart = client
+        .request(&ClientRequest::Start(lab_sample_config()))
+        .await
+        .unwrap();
+    assert_eq!(restart, ServerResponse::Ok);
 
     server.abort();
     let _ = std::fs::remove_dir_all(data_dir);

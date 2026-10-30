@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "description": "Target on-disk layout for RustMultiseat installer (scaffold; not yet packaged).",
+  "install_root": "%ProgramFiles%\\RustMultiseat",
+  "service": {
+    "name": "RustMultiseat",
+    "bin": "multiseat-daemon.exe",
+    "install_args": ["--service"],
+    "ctl_install": ["multiseat-daemon", "--install"],
+    "pipe": "\\\\.\\pipe\\RustMultiseatDaemon"
+  },
+  "binaries": [
+    "multiseat-daemon.exe",
+    "multiseat-ctl.exe",
+    "multiseat-gui.exe",
+    "multiseat-session-agent.exe"
+  ],
+  "driver_packages": {
+    "input-filter": "drivers/input-filter",
+    "virtual-input": "drivers/virtual-input",
+    "display-iddcx": "drivers/display/iddcx",
+    "display-wddm-legacy": "drivers/display/wddm-legacy",
+    "display-win7-legacy": "drivers/display/win7-legacy"
+  },
+  "uninstall_order": [
+    "display-*",
+    "input-filter",
+    "virtual-input",
+    "service",
+    "user-mode-payload"
+  ]
+}

@@ -195,10 +195,7 @@ mod tests {
 
     #[test]
     fn parse_splits_tcp_and_pipe() {
-        assert!(matches!(
-            Endpoint::parse("127.0.0.1:9"),
-            Endpoint::Tcp(_)
-        ));
+        assert!(matches!(Endpoint::parse("127.0.0.1:9"), Endpoint::Tcp(_)));
         assert!(matches!(
             Endpoint::parse(r"\\.\pipe\x"),
             Endpoint::NamedPipe(_)

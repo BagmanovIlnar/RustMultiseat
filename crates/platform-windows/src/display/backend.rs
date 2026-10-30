@@ -79,17 +79,31 @@ impl DisplayBackend for WindowsDisplayBackend {
     }
 
     fn attach(&mut self, seat: &SeatConfig, session: &SessionHandle) -> CoreResult<RollbackToken> {
-        warn!(
+        if !self.probe.attach_supported {
+            warn!(
+                seat = %seat.id,
+                session = session.session_id.0,
+                backend = %self.probe.backend_name,
+                "native display attach refused (Stage 0 PoC pending)"
+            );
+            return Err(CoreError::Backend(format!(
+                "native display attach unavailable for candidate={}: {}",
+                self.probe.backend_name,
+                self.probe.detail()
+            )));
+        }
+        // Soft bookkeeping attach (lab): records seat→token without real IddCx IOCTL.
+        let token =
+            RollbackToken::new(format!("soft-display-{}-{}", seat.id, session.session_id.0));
+        info!(
             seat = %seat.id,
             session = session.session_id.0,
             backend = %self.probe.backend_name,
-            "native display attach refused (Stage 0 PoC pending)"
+            token = %token.0,
+            "SOFT native display attach (bookkeeping only; no real driver bind)"
         );
-        Err(CoreError::Backend(format!(
-            "native display attach unavailable for candidate={}: {}",
-            self.probe.backend_name,
-            self.probe.detail()
-        )))
+        self.attached.insert(seat.id, token.clone());
+        Ok(token)
     }
 
     fn detach(&mut self, seat_id: SeatId) -> CoreResult<()> {
@@ -120,18 +134,48 @@ mod tests {
     }
 
     #[test]
-    fn attach_always_errors_until_poc() {
+    fn attach_errors_without_attach_support() {
+        let _g = crate::test_env::lock();
+        std::env::remove_var(crate::DISPLAY_ATTACH_ENV);
+        std::env::remove_var(crate::DISPLAY_BACKEND_ENV);
         let mut backend = WindowsDisplayBackend::new(2);
+        if backend.capabilities().unwrap().attach_supported {
+            return;
+        }
         let session = SessionHandle {
             seat_id: SeatId(1),
             session_id: SessionId(1),
         };
         let err = backend.attach(&seat(), &session).unwrap_err();
-        assert!(err.to_string().contains("native display attach unavailable"));
+        assert!(err
+            .to_string()
+            .contains("native display attach unavailable"));
+    }
+
+    #[test]
+    fn soft_attach_when_lab_flag_set() {
+        let _g = crate::test_env::lock();
+        std::env::set_var(crate::DISPLAY_BACKEND_ENV, "iddcx");
+        std::env::set_var(crate::DISPLAY_ATTACH_ENV, "1");
+        let mut backend = WindowsDisplayBackend::new(2);
+        assert!(backend.capabilities().unwrap().attach_supported);
+        backend.prepare(&[seat()]).unwrap();
+        let session = SessionHandle {
+            seat_id: SeatId(1),
+            session_id: SessionId(1),
+        };
+        let token = backend.attach(&seat(), &session).unwrap();
+        assert!(token.0.starts_with("soft-display-"));
+        backend.detach(SeatId(1)).unwrap();
+        std::env::remove_var(crate::DISPLAY_ATTACH_ENV);
+        std::env::remove_var(crate::DISPLAY_BACKEND_ENV);
     }
 
     #[test]
     fn prepare_blocked_without_attach_support() {
+        let _g = crate::test_env::lock();
+        std::env::remove_var(crate::DISPLAY_ATTACH_ENV);
+        std::env::remove_var(crate::DISPLAY_BACKEND_ENV);
         let mut backend = WindowsDisplayBackend::new(2);
         if backend.capabilities().unwrap().attach_supported {
             return;

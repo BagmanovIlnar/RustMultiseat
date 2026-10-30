@@ -8,8 +8,8 @@ use multiseat_ipc::ClientIdentity;
 use tokio::net::windows::named_pipe::ServerOptions;
 use tracing::{info, warn};
 
-use crate::handler::DaemonState;
 use super::handle_connection;
+use crate::handler::DaemonState;
 
 /// Accepts Named Pipe clients with local ACL and SID checks.
 pub async fn run_named_pipe_server(

@@ -247,6 +247,8 @@ where
         }
 
         self.state = SeatState::RollingBack;
+        // Belt-and-suspenders: clear input routes before journal compensation.
+        self.inputs.force_fail_open();
         let result = self.rollback_internal();
         self.active_sessions.clear();
         self.journal = None;
@@ -265,6 +267,7 @@ where
         }
 
         self.state = SeatState::RollingBack;
+        self.inputs.force_fail_open();
         self.rollback_internal()?;
         self.active_sessions.clear();
         self.journal = None;

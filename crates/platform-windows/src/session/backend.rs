@@ -77,8 +77,7 @@ impl WindowsSessionBackend {
     }
 
     fn next_unassigned_active(&self) -> Option<u32> {
-        let assigned: std::collections::HashSet<u32> =
-            self.seats.values().map(|id| id.0).collect();
+        let assigned: std::collections::HashSet<u32> = self.seats.values().map(|id| id.0).collect();
         self.probe
             .sessions
             .iter()
@@ -249,7 +248,9 @@ mod tests {
             return;
         }
         let err = backend.create_or_connect(&sample_seat()).unwrap_err();
-        assert!(err.to_string().contains("native session create unavailable"));
+        assert!(err
+            .to_string()
+            .contains("native session create unavailable"));
     }
 
     #[test]

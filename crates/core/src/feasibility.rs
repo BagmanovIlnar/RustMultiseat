@@ -96,25 +96,43 @@ impl DualSessionProbeResult {
             .filter(|s| s.state == SessionConnectState::Active && s.is_console)
             .count();
 
+        let roster = if sessions.is_empty() {
+            "sessions=[]".into()
+        } else {
+            let parts: Vec<String> = sessions
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}:{}:{:?}{}",
+                        s.session_id,
+                        s.station_name,
+                        s.state,
+                        if s.is_console { "*" } else { "" }
+                    )
+                })
+                .collect();
+            format!("sessions=[{}]", parts.join(", "))
+        };
+
         let (status, detail) = if active_count >= 2 {
             (
                 CheckStatus::Pass,
                 format!(
-                    "observed {active_count} active sessions ({active_console_count} console-like); dual interactive presence confirmed"
+                    "observed {active_count} active sessions ({active_console_count} console-like); dual interactive presence confirmed; {roster}"
                 ),
             )
         } else if documented_create_available {
             (
                 CheckStatus::Unknown,
                 format!(
-                    "active={active_count}; documented create path available but second session not yet verified"
+                    "active={active_count}; documented create path available but second session not yet verified; {roster}"
                 ),
             )
         } else {
             (
                 CheckStatus::Blocked,
                 format!(
-                    "active={active_count} console_active={active_console_count}; no documented API to create a second local interactive session on this host class"
+                    "active={active_count} console_active={active_console_count}; no documented API to create a second local interactive session on this host class; {roster}"
                 ),
             )
         };
@@ -187,9 +205,7 @@ impl DisplayProbeResult {
         } else if backend_name == "none" {
             (
                 CheckStatus::Blocked,
-                format!(
-                    "outputs={physical_outputs}; no display-model candidate for this OS"
-                ),
+                format!("outputs={physical_outputs}; no display-model candidate for this OS"),
             )
         } else if !attach_supported {
             (
@@ -317,6 +333,156 @@ impl InputProbeResult {
     }
 }
 
+/// Evidence from an automated fail-open exercise (Start → AgentFailOpen → Idle).
+///
+/// This does **not** prove KMDF crash recovery; it proves the orchestrator
+/// restores a safe Idle/fail-open path when an agent requests emergency stop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailOpenProbeResult {
+    /// True when snapshot state was Idle after AgentFailOpen.
+    pub restored_to_idle: bool,
+    /// Checklist status for `fail_open`.
+    pub status: CheckStatus,
+    detail: String,
+}
+
+impl FailOpenProbeResult {
+    /// Evidence detail string.
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    /// Builds a verdict from the orchestrator state after AgentFailOpen.
+    ///
+    /// ```
+    /// use multiseat_core::{CheckStatus, FailOpenProbeResult};
+    ///
+    /// let ok = FailOpenProbeResult::evaluate(true, "AgentFailOpen → Idle");
+    /// assert_eq!(ok.status, CheckStatus::Pass);
+    /// let bad = FailOpenProbeResult::evaluate(false, "still Active");
+    /// assert_eq!(bad.status, CheckStatus::Fail);
+    /// ```
+    pub fn evaluate(restored_to_idle: bool, detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        let status = if restored_to_idle {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Fail
+        };
+        Self {
+            restored_to_idle,
+            status,
+            detail,
+        }
+    }
+
+    /// Probe not run (local-only checklist / no daemon).
+    pub fn skipped(reason: impl Into<String>) -> Self {
+        Self {
+            restored_to_idle: false,
+            status: CheckStatus::Unknown,
+            detail: reason.into(),
+        }
+    }
+}
+
+/// One step in the soft input-filter E2E (apply → arm → ping → fail-open).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoftInputE2eStep {
+    /// Step id (`preview`, `apply_no_arm`, `apply_arm`, `ping`, `fail_open`).
+    pub name: String,
+    /// Whether the step succeeded.
+    pub ok: bool,
+    /// Short evidence / error.
+    pub detail: String,
+}
+
+/// Evidence from `multiseat-ctl input-soft-e2e` (user-mode soft/native control path).
+///
+/// Does **not** prove physical HID suppress; proves SET_ROUTES apply + arm +
+/// heartbeat + fail-open bookkeeping when a control device is present (soft lab
+/// via `MULTISEAT_INPUT_FILTER=1` or a loaded `.sys`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoftInputE2eResult {
+    /// All steps passed.
+    pub ok: bool,
+    /// Control path was soft-present (bookkeeping only).
+    pub soft: bool,
+    /// Ordered step results.
+    pub steps: Vec<SoftInputE2eStep>,
+    /// Checklist-style status.
+    pub status: CheckStatus,
+    detail: String,
+}
+
+impl SoftInputE2eResult {
+    /// Evidence detail string.
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    /// Builds a verdict from executed steps.
+    ///
+    /// ```
+    /// use multiseat_core::{CheckStatus, SoftInputE2eResult, SoftInputE2eStep};
+    ///
+    /// let steps = vec![SoftInputE2eStep {
+    ///     name: "apply_arm".into(),
+    ///     ok: true,
+    ///     detail: "entries=4".into(),
+    /// }];
+    /// let r = SoftInputE2eResult::from_steps(true, steps);
+    /// assert!(r.ok);
+    /// assert_eq!(r.status, CheckStatus::Pass);
+    /// ```
+    pub fn from_steps(soft: bool, steps: Vec<SoftInputE2eStep>) -> Self {
+        let ok = !steps.is_empty() && steps.iter().all(|s| s.ok);
+        let detail = if ok {
+            format!(
+                "soft_input_e2e ok soft={soft} steps={}",
+                steps
+                    .iter()
+                    .map(|s| s.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        } else {
+            let failed = steps
+                .iter()
+                .filter(|s| !s.ok)
+                .map(|s| format!("{}:{}", s.name, s.detail))
+                .collect::<Vec<_>>()
+                .join("; ");
+            format!("soft_input_e2e failed soft={soft}: {failed}")
+        };
+        let status = if ok {
+            CheckStatus::Pass
+        } else if steps.is_empty() {
+            CheckStatus::Unknown
+        } else {
+            CheckStatus::Fail
+        };
+        Self {
+            ok,
+            soft,
+            steps,
+            status,
+            detail,
+        }
+    }
+
+    /// Not run (operator skipped).
+    pub fn skipped(reason: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            soft: false,
+            steps: vec![],
+            status: CheckStatus::Unknown,
+            detail: reason.into(),
+        }
+    }
+}
+
 /// One Stage 0 checklist row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeasibilityCheck {
@@ -389,6 +555,17 @@ impl FeasibilityReport {
         display: Option<&DisplayProbeResult>,
         input: Option<&InputProbeResult>,
     ) -> Self {
+        Self::from_hardware_and_probes_ext(tree, session, display, input, None)
+    }
+
+    /// Like [`Self::from_hardware_and_probes`], with optional automated fail-open evidence.
+    pub fn from_hardware_and_probes_ext(
+        tree: &HardwareTree,
+        session: Option<&DualSessionProbeResult>,
+        display: Option<&DisplayProbeResult>,
+        input: Option<&InputProbeResult>,
+        fail_open: Option<&FailOpenProbeResult>,
+    ) -> Self {
         let caps = tree.capabilities.clone();
         let keyboards = tree
             .input_devices
@@ -438,6 +615,37 @@ impl FeasibilityReport {
                     )
                 }
             }
+        };
+
+        let (fail_open_status, fail_open_detail) = match fail_open {
+            Some(probe) => (probe.status, probe.detail().to_string()),
+            None => match input {
+                Some(probe) if probe.fail_open_ready && !probe.filter_installed => (
+                    CheckStatus::Unknown,
+                    format!(
+                        "fail_open_ready={} filter_installed={}; watchdog/crash injection lab pending",
+                        probe.fail_open_ready, probe.filter_installed
+                    ),
+                ),
+                Some(probe) if probe.fail_open_ready && probe.filter_installed => (
+                    CheckStatus::Unknown,
+                    format!(
+                        "fail_open_ready={} filter_installed={}; watchdog/crash injection lab pending",
+                        probe.fail_open_ready, probe.filter_installed
+                    ),
+                ),
+                Some(probe) => (
+                    CheckStatus::Fail,
+                    format!(
+                        "fail_open_ready={} filter_installed={}; host emergency input at risk",
+                        probe.fail_open_ready, probe.filter_installed
+                    ),
+                ),
+                None => (
+                    CheckStatus::Unknown,
+                    "Watchdog/fail-open path not implemented for real backends".into(),
+                ),
+            },
         };
 
         let checks = vec![
@@ -498,26 +706,8 @@ impl FeasibilityReport {
                 id: "fail_open".into(),
                 title: "Crash of service/agent/driver restores host emergency input".into(),
                 required: true,
-                status: match input {
-                    Some(probe) if probe.fail_open_ready && !probe.filter_installed => {
-                        // Safe default: no filter means no suppression to unwind.
-                        CheckStatus::Unknown
-                    }
-                    Some(probe) if probe.fail_open_ready && probe.filter_installed => {
-                        CheckStatus::Unknown
-                    }
-                    Some(_) => CheckStatus::Fail,
-                    None => CheckStatus::Unknown,
-                },
-                detail: match input {
-                    Some(probe) => format!(
-                        "fail_open_ready={} filter_installed={}; watchdog/crash injection lab pending",
-                        probe.fail_open_ready, probe.filter_installed
-                    ),
-                    None => {
-                        "Watchdog/fail-open path not implemented for real backends".into()
-                    }
-                },
+                status: fail_open_status,
+                detail: fail_open_detail,
             },
             FeasibilityCheck {
                 id: "signing_path".into(),
@@ -569,6 +759,128 @@ impl FeasibilityReport {
             summary,
         }
     }
+
+    /// Renders a lab-friendly Markdown summary (GO/NO-GO + checklist table).
+    ///
+    /// ```
+    /// use multiseat_core::{FeasibilityReport, HardwareTree, PlatformCapabilities};
+    ///
+    /// let tree = HardwareTree {
+    ///     revision: 1,
+    ///     gpus: vec![],
+    ///     displays: vec![],
+    ///     usb_roots: vec![],
+    ///     input_devices: vec![],
+    ///     capabilities: PlatformCapabilities {
+    ///         os: "mock".into(),
+    ///         os_version: "0".into(),
+    ///         display_backend_available: false,
+    ///         session_backend_available: false,
+    ///         input_router_available: false,
+    ///         secure_boot_expected: true,
+    ///     },
+    /// };
+    /// let md = FeasibilityReport::from_hardware(&tree).to_markdown();
+    /// assert!(md.contains("NO-GO") || md.contains("GO"));
+    /// assert!(md.contains("| id |"));
+    /// ```
+    pub fn to_markdown(&self) -> String {
+        let verdict = if self.go { "GO" } else { "NO-GO" };
+        let mut out = String::new();
+        out.push_str(&format!("# Stage 0 feasibility — {verdict}\n\n"));
+        out.push_str(&format!("{}\n\n", self.summary));
+        out.push_str(&format!(
+            "- OS: `{}` `{}`\n- display_backend={} session_backend={} input_router={} secure_boot_expected={}\n\n",
+            self.capabilities.os,
+            self.capabilities.os_version,
+            self.capabilities.display_backend_available,
+            self.capabilities.session_backend_available,
+            self.capabilities.input_router_available,
+            self.capabilities.secure_boot_expected,
+        ));
+        out.push_str("| id | status | required | title | detail |\n");
+        out.push_str("|---|---|---|---|---|\n");
+        for c in &self.checks {
+            let detail = c.detail.replace('|', "\\|").replace('\n', " ");
+            let title = c.title.replace('|', "\\|");
+            out.push_str(&format!(
+                "| `{}` | {:?} | {} | {} | {} |\n",
+                c.id, c.status, c.required, title, detail
+            ));
+        }
+        out.push_str("\n## Manual lab matrix (fill on Windows)\n\n");
+        out.push_str(
+            "- [ ] Login / lock / UAC / Secure Desktop / CAD\n\
+             - [ ] Sleep / resume\n\
+             - [ ] Fast User Switching\n\
+             - [ ] Display + HID hot-plug while Active\n\
+             - [ ] Crash service / agent / filter → host emergency input restored\n\
+             - [ ] Signing path without Secure Boot off\n",
+        );
+        out
+    }
+}
+
+/// Durable Stage 0 lab run: probes + merged feasibility report.
+///
+/// Written by `multiseat-ctl lab-checklist` for Windows lab evidence and CI
+/// tooling smoke (expects `go == false` until Stage 0 PoC passes).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stage0LabArtifact {
+    /// Unix epoch milliseconds when the checklist ran.
+    pub generated_at_unix_ms: u64,
+    /// Host OS label (`std::env::consts::OS` or probe).
+    pub host_os: String,
+    /// Optional daemon endpoint used for inventory-backed report.
+    pub daemon_addr: Option<String>,
+    /// Dual-session probe evidence.
+    pub session: DualSessionProbeResult,
+    /// Display-model probe evidence.
+    pub display: DisplayProbeResult,
+    /// Input-filter probe evidence.
+    pub input: InputProbeResult,
+    /// Optional automated fail-open exercise evidence.
+    pub fail_open: Option<FailOpenProbeResult>,
+    /// Merged Stage 0 report.
+    pub report: FeasibilityReport,
+}
+
+impl Stage0LabArtifact {
+    /// Markdown view of the embedded report plus probe headlines.
+    pub fn to_markdown(&self) -> String {
+        let mut out = self.report.to_markdown();
+        out.push_str("\n## Probe headlines\n\n");
+        out.push_str(&format!(
+            "- session: {:?} — {}\n- display: {:?} backend=`{}` — {}\n- input: {:?} filter={} fail_open={} — {}\n",
+            self.session.status,
+            self.session.detail(),
+            self.display.status,
+            self.display.backend_name,
+            self.display.detail(),
+            self.input.status,
+            self.input.filter_installed,
+            self.input.fail_open_ready,
+            self.input.detail(),
+        ));
+        if let Some(fo) = &self.fail_open {
+            out.push_str(&format!(
+                "- fail_open_auto: {:?} restored_to_idle={} — {}\n",
+                fo.status,
+                fo.restored_to_idle,
+                fo.detail()
+            ));
+        }
+        if let Some(addr) = &self.daemon_addr {
+            out.push_str(&format!("\nDaemon: `{addr}`\n"));
+        } else {
+            out.push_str("\nDaemon: _(local probes only)_\n");
+        }
+        out.push_str(&format!(
+            "Generated_at_unix_ms: {}\nHost OS: `{}`\n",
+            self.generated_at_unix_ms, self.host_os
+        ));
+        out
+    }
 }
 
 #[cfg(test)]
@@ -577,11 +889,7 @@ mod tests {
     use crate::hardware::{DisplayInfo, GpuInfo, InputDeviceInfo};
     use crate::ids::{DeviceId, DisplayId};
 
-    fn tree_with(
-        displays: usize,
-        keyboards: usize,
-        pointers: usize,
-    ) -> HardwareTree {
+    fn tree_with(displays: usize, keyboards: usize, pointers: usize) -> HardwareTree {
         let mut tree = HardwareTree {
             revision: 1,
             gpus: vec![GpuInfo {
@@ -733,5 +1041,68 @@ mod tests {
             .find(|c| c.id == "input_isolation")
             .unwrap();
         assert_eq!(row.status, CheckStatus::Blocked);
+    }
+
+    #[test]
+    fn markdown_mentions_verdict_and_manual_matrix() {
+        let md = FeasibilityReport::from_hardware(&tree_with(2, 2, 2)).to_markdown();
+        assert!(md.contains("NO-GO"));
+        assert!(md.contains("`dual_session`"));
+        assert!(md.contains("Manual lab matrix"));
+    }
+
+    #[test]
+    fn soft_input_e2e_from_steps() {
+        let ok = SoftInputE2eResult::from_steps(
+            true,
+            vec![SoftInputE2eStep {
+                name: "apply_arm".into(),
+                ok: true,
+                detail: "ok".into(),
+            }],
+        );
+        assert!(ok.ok);
+        assert_eq!(ok.status, CheckStatus::Pass);
+        let bad = SoftInputE2eResult::from_steps(
+            false,
+            vec![SoftInputE2eStep {
+                name: "ping".into(),
+                ok: false,
+                detail: "unhealthy".into(),
+            }],
+        );
+        assert!(!bad.ok);
+        assert_eq!(bad.status, CheckStatus::Fail);
+    }
+
+    #[test]
+    fn fail_open_probe_overrides_status() {
+        let probe = FailOpenProbeResult::evaluate(true, "AgentFailOpen → Idle");
+        let report = FeasibilityReport::from_hardware_and_probes_ext(
+            &tree_with(2, 2, 2),
+            None,
+            None,
+            None,
+            Some(&probe),
+        );
+        let row = report.checks.iter().find(|c| c.id == "fail_open").unwrap();
+        assert_eq!(row.status, CheckStatus::Pass);
+        // Still NO-GO: dual_session / display / etc. remain unresolved.
+        assert!(!report.go);
+    }
+
+    #[test]
+    fn dual_session_detail_lists_roster() {
+        let probe = DualSessionProbeResult::from_sessions(
+            vec![ObservedSession {
+                session_id: 1,
+                station_name: "Console".into(),
+                state: SessionConnectState::Active,
+                is_console: true,
+            }],
+            false,
+        );
+        assert!(probe.detail().contains("sessions=["));
+        assert!(probe.detail().contains("1:Console"));
     }
 }

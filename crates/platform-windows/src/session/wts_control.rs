@@ -81,30 +81,30 @@ fn lock_windows(session_id: u32) -> CoreResult<()> {
     // LockWorkStation is only valid on the interactive desktop of the target
     // session; launch it there via the same CreateProcessAsUser path as agents.
     const LOCK_CMD: &str = "rundll32.exe user32.dll,LockWorkStation";
-    info!(session_id, "attempting session lock via CreateProcessAsUser");
+    info!(
+        session_id,
+        "attempting session lock via CreateProcessAsUser"
+    );
     let pid = super::agent_as_user::spawn_command_in_session(session_id, LOCK_CMD)?;
-    info!(session_id, pid, "LockWorkStation helper launched in session");
+    info!(
+        session_id,
+        pid, "LockWorkStation helper launched in session"
+    );
     Ok(())
 }
 
 #[cfg(windows)]
 fn disconnect_windows(session_id: u32) -> CoreResult<()> {
     use windows::Win32::Foundation::HANDLE;
-    use windows::Win32::System::RemoteDesktop::{
-        WTSDisconnectSession, WTS_CURRENT_SERVER_HANDLE,
-    };
+    use windows::Win32::System::RemoteDesktop::{WTSDisconnectSession, WTS_CURRENT_SERVER_HANDLE};
 
     info!(session_id, "attempting WTSDisconnectSession");
     unsafe {
-        WTSDisconnectSession(
-            Some(HANDLE(WTS_CURRENT_SERVER_HANDLE.0)),
-            session_id,
-            false,
-        )
-        .map_err(|err| {
-            warn!(session_id, error = %err, "WTSDisconnectSession failed");
-            CoreError::Backend(format!("WTSDisconnectSession({session_id}) failed: {err}"))
-        })?;
+        WTSDisconnectSession(Some(HANDLE(WTS_CURRENT_SERVER_HANDLE.0)), session_id, false)
+            .map_err(|err| {
+                warn!(session_id, error = %err, "WTSDisconnectSession failed");
+                CoreError::Backend(format!("WTSDisconnectSession({session_id}) failed: {err}"))
+            })?;
     }
     info!(session_id, "WTSDisconnectSession succeeded");
     Ok(())

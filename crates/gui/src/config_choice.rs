@@ -64,7 +64,8 @@ mod tests {
 
     #[test]
     fn empty_everything_uses_lab_sample() {
-        let (cfg, src) = config_for_action(&MultiseatConfig::default(), &MultiseatConfig::default());
+        let (cfg, src) =
+            config_for_action(&MultiseatConfig::default(), &MultiseatConfig::default());
         assert_eq!(src, ConfigSource::LabSample);
         assert!(!cfg.seats.is_empty());
     }

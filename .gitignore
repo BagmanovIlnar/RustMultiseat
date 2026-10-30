@@ -1,4 +1,6 @@
 /target/
+/artifacts/
+/installer/artifacts/
 /fuzz/target/
 /fuzz/corpus/
 /fuzz/artifacts/

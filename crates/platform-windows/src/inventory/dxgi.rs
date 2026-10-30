@@ -41,10 +41,7 @@ unsafe fn enumerate_gpus_and_displays_inner() -> CoreResult<(Vec<GpuInfo>, Vec<D
         let luid = desc.AdapterLuid;
         let gpu_id = format!(
             "pci:{:04x}:{:04x}:luid:{:08x}-{:08x}",
-            desc.VendorId,
-            desc.DeviceId,
-            luid.HighPart as u32,
-            luid.LowPart
+            desc.VendorId, desc.DeviceId, luid.HighPart as u32, luid.LowPart
         );
 
         gpus.push(GpuInfo {

@@ -140,17 +140,14 @@ unsafe fn interface_path_and_instance(
 
     let mut buf = vec![0u8; required.max(8) as usize];
     let detail = buf.as_mut_ptr().cast::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>();
-    (*detail).cbSize = if cfg!(target_pointer_width = "64") { 8 } else { 6 };
+    (*detail).cbSize = if cfg!(target_pointer_width = "64") {
+        8
+    } else {
+        6
+    };
 
-    SetupDiGetDeviceInterfaceDetailW(
-        list,
-        iface,
-        Some(detail),
-        required,
-        None,
-        Some(&mut info),
-    )
-    .map_err(|e| CoreError::Backend(format!("SetupDiGetDeviceInterfaceDetailW failed: {e}")))?;
+    SetupDiGetDeviceInterfaceDetailW(list, iface, Some(detail), required, None, Some(&mut info))
+        .map_err(|e| CoreError::Backend(format!("SetupDiGetDeviceInterfaceDetailW failed: {e}")))?;
 
     let path = read_device_path(detail);
     let instance_id = device_instance_id(list, &info)?;
@@ -289,11 +286,12 @@ unsafe fn query_port(handle: HANDLE, port: u32) -> CoreResult<HubPortInfo> {
 /// Looks up a hub snapshot by instance id (case-insensitive).
 pub fn find_hub<'a>(hubs: &'a [HubSnapshot], instance_id: &str) -> Option<&'a HubSnapshot> {
     let needle = instance_id.to_ascii_uppercase();
-    hubs.iter()
-        .find(|h| h.instance_id.eq_ignore_ascii_case(instance_id) || {
+    hubs.iter().find(|h| {
+        h.instance_id.eq_ignore_ascii_case(instance_id) || {
             h.instance_id.to_ascii_uppercase().contains(&needle)
                 || needle.contains(&h.instance_id.to_ascii_uppercase())
-        })
+        }
+    })
 }
 
 /// Index connected IOCTL ports by USB device address for CM cross-check.

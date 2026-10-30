@@ -311,6 +311,9 @@ mod tests {
         let hardware = hw_with(live.clone(), ptr, host_kbd, host_ptr);
         let report = remap_config(&config, &hardware);
         assert_eq!(report.config.seats[0].keyboard_ids[0], live);
-        assert!(report.remaps.iter().any(|r| r.role.starts_with("seat_1_keyboard")));
+        assert!(report
+            .remaps
+            .iter()
+            .any(|r| r.role.starts_with("seat_1_keyboard")));
     }
 }

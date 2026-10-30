@@ -1,8 +1,6 @@
 //! Host-selected session backend (native WTS on Windows, mock elsewhere).
 
-use multiseat_core::{
-    BackendHealth, CoreResult, SeatConfig, SessionBackend, SessionHandle,
-};
+use multiseat_core::{BackendHealth, CoreResult, SeatConfig, SessionBackend, SessionHandle};
 use tracing::info;
 
 use crate::mock::MockSessionBackend;

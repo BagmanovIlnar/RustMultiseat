@@ -10,6 +10,7 @@ pub mod error;
 pub mod feasibility;
 pub mod hardware;
 pub mod ids;
+pub mod install;
 pub mod ipc;
 pub mod journal;
 pub mod orchestrator;
@@ -21,14 +22,16 @@ pub mod validation;
 
 pub use error::{CoreError, CoreResult};
 pub use feasibility::{
-    CheckStatus, DisplayProbeResult, DualSessionProbeResult, FeasibilityCheck, FeasibilityReport,
-    InputProbeResult, ObservedSession, SessionConnectState,
+    CheckStatus, DisplayProbeResult, DualSessionProbeResult, FailOpenProbeResult, FeasibilityCheck,
+    FeasibilityReport, InputProbeResult, ObservedSession, SessionConnectState, SoftInputE2eResult,
+    SoftInputE2eStep, Stage0LabArtifact,
 };
 pub use hardware::{
     DisplayInfo, GpuInfo, HardwareTree, InputDeviceInfo, InputDeviceKind, PlatformCapabilities,
     UsbNode,
 };
 pub use ids::{DeviceId, DisplayId, SeatId, SessionId, UserSid};
+pub use install::{DriverPackageId, InstallPlan, OsGeneration, PlannedPackage, SigningPath};
 pub use ipc::{ClientRequest, DaemonEvent, ProtocolError, RequestId, ServerResponse};
 pub use journal::{
     journal_io_err, JournalEntry, JournalStore, MemoryJournalStore, OperationJournal,
@@ -42,6 +45,4 @@ pub use traits::{
     BackendHealth, DisplayBackend, DisplayCapabilities, HardwareEnumerator, InputAssignments,
     InputRouter, SessionBackend, SessionHandle,
 };
-pub use validation::{
-    validate_config, ValidationIssue, ValidationReport, ValidationSeverity,
-};
+pub use validation::{validate_config, ValidationIssue, ValidationReport, ValidationSeverity};

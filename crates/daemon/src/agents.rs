@@ -124,18 +124,23 @@ mod tests {
 
     #[test]
     fn heartbeat_refreshes_timeout_window() {
-        let mut reg = AgentRegistry::with_timeouts(Duration::from_millis(100), Duration::from_millis(300));
+        let mut reg =
+            AgentRegistry::with_timeouts(Duration::from_millis(100), Duration::from_millis(300));
         let t0 = Instant::now();
         reg.register(SeatId(1), 1, t0);
         assert!(reg.timed_out(t0 + Duration::from_millis(200)).is_empty());
         assert!(reg.heartbeat(SeatId(1), t0 + Duration::from_millis(250)));
         assert!(reg.timed_out(t0 + Duration::from_millis(400)).is_empty());
-        assert_eq!(reg.timed_out(t0 + Duration::from_millis(600)), vec![SeatId(1)]);
+        assert_eq!(
+            reg.timed_out(t0 + Duration::from_millis(600)),
+            vec![SeatId(1)]
+        );
     }
 
     #[test]
     fn reap_removes_dead_agents() {
-        let mut reg = AgentRegistry::with_timeouts(Duration::from_millis(50), Duration::from_millis(100));
+        let mut reg =
+            AgentRegistry::with_timeouts(Duration::from_millis(50), Duration::from_millis(100));
         let t0 = Instant::now();
         reg.register(SeatId(2), 1, t0);
         let dead = reg.reap_timed_out(t0 + Duration::from_millis(250));

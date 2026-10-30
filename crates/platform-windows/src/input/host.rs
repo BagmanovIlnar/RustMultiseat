@@ -1,8 +1,6 @@
 //! Host-selected input router (native stub on Windows, mock elsewhere).
 
-use multiseat_core::{
-    BackendHealth, CoreResult, InputAssignments, InputRouter, RollbackToken,
-};
+use multiseat_core::{BackendHealth, CoreResult, InputAssignments, InputRouter, RollbackToken};
 use tracing::info;
 
 use crate::input::backend::WindowsInputRouter;
@@ -89,6 +87,13 @@ impl InputRouter for HostInputRouter {
         match self {
             Self::Mock(inner) => inner.health(),
             Self::Native(inner) => inner.health(),
+        }
+    }
+
+    fn force_fail_open(&mut self) {
+        match self {
+            Self::Mock(inner) => inner.force_fail_open(),
+            Self::Native(inner) => inner.force_fail_open(),
         }
     }
 }

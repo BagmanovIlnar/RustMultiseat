@@ -566,12 +566,23 @@ pub struct MockInputRouter {
 }
 
 impl MockInputRouter {
-    /// Forces fail-open mode, clearing active routes.
+    /// Sticky fail-open mode (blocks later apply until cleared). Prefer
+    /// [`InputRouter::force_fail_open`] for emergency route clear.
     pub fn set_fail_open(&mut self, enabled: bool) {
         self.fail_open = enabled;
         if enabled {
             self.active = None;
         }
+    }
+
+    /// Whether sticky fail-open is engaged (tests).
+    pub fn is_fail_open(&self) -> bool {
+        self.fail_open
+    }
+
+    /// Whether routes are currently applied (tests).
+    pub fn has_active_routes(&self) -> bool {
+        self.active.is_some()
     }
 }
 
@@ -606,5 +617,12 @@ impl InputRouter for MockInputRouter {
         } else {
             Ok(BackendHealth::ok())
         }
+    }
+
+    fn force_fail_open(&mut self) {
+        // Clear routes without sticky disable so Start can recover after emergency.
+        self.active = None;
+        // Best-effort: notify KMDF control device if a lab filter is present.
+        let _ = crate::input::emergency_fail_open();
     }
 }

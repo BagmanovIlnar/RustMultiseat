@@ -2,14 +2,14 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use multiseat_core::InputDeviceKind;
 use multiseat_core::{
     ClientRequest, CoreError, DaemonEvent, FeasibilityReport, HardwareEnumerator, JournalStore,
     MultiseatConfig, ProtocolError, SeatId, SeatOrchestrator, SeatState, ServerResponse,
     PROTOCOL_VERSION,
 };
-use multiseat_core::InputDeviceKind;
 use multiseat_platform_windows::{
     log_native_session_flags, probe_display, probe_dual_sessions, probe_input, HostDisplayBackend,
     HostHardwareEnumerator, HostInputRouter, HostSessionBackend,
@@ -18,7 +18,13 @@ use tokio::sync::{broadcast, Mutex};
 use tracing::{info, warn};
 
 use crate::agents::AgentRegistry;
+use crate::filter_watch::{ping_filter_health, FilterWatchAction, FilterWatchdog};
 use crate::persist::{FileConfigStore, FileJournalStore};
+
+/// Env: override agent heartbeat timeout in milliseconds (lab / IT).
+pub const AGENT_TIMEOUT_ENV: &str = "MULTISEAT_AGENT_TIMEOUT_MS";
+/// Env: override advertised heartbeat interval in milliseconds.
+pub const AGENT_HEARTBEAT_ENV: &str = "MULTISEAT_AGENT_HEARTBEAT_MS";
 
 type HostOrchestrator = SeatOrchestrator<
     HostHardwareEnumerator,
@@ -35,6 +41,8 @@ pub struct DaemonState {
     pub events: broadcast::Sender<DaemonEvent>,
     /// Live session-agent heartbeats.
     pub agents: Mutex<AgentRegistry>,
+    /// Input-filter health while Active (armed on Start).
+    pub filter_watch: Mutex<FilterWatchdog>,
     /// Durable journal path store.
     journal_store: FileJournalStore,
     /// Durable saved configuration.
@@ -50,7 +58,26 @@ impl DaemonState {
 
     /// Deterministic mock enumerator (tests / MULTISEAT_USE_MOCK workflows).
     pub fn mock_with_data_dir(data_dir: impl Into<PathBuf>) -> Arc<Self> {
-        Self::with_enumerator(data_dir, HostHardwareEnumerator::mock(), None)
+        Self::with_enumerator(
+            data_dir,
+            HostHardwareEnumerator::mock(),
+            None,
+            agent_registry_from_env(),
+        )
+    }
+
+    /// Like [`Self::mock_with_data_dir`], with custom agent heartbeat windows (IT).
+    pub fn mock_with_agent_timeouts(
+        data_dir: impl Into<PathBuf>,
+        heartbeat: Duration,
+        timeout: Duration,
+    ) -> Arc<Self> {
+        Self::with_enumerator(
+            data_dir,
+            HostHardwareEnumerator::mock(),
+            None,
+            AgentRegistry::with_timeouts(heartbeat, timeout),
+        )
     }
 
     /// Production/dev daemon: native inventory on Windows, mock elsewhere.
@@ -65,13 +92,19 @@ impl DaemonState {
     ) -> Arc<Self> {
         let bind = bind.into();
         let addr = if bind.is_empty() { None } else { Some(bind) };
-        Self::with_enumerator(data_dir, HostHardwareEnumerator::auto(), addr)
+        Self::with_enumerator(
+            data_dir,
+            HostHardwareEnumerator::auto(),
+            addr,
+            agent_registry_from_env(),
+        )
     }
 
     fn with_enumerator(
         data_dir: impl Into<PathBuf>,
         mut hardware: HostHardwareEnumerator,
         daemon_addr: Option<String>,
+        agents: AgentRegistry,
     ) -> Arc<Self> {
         let data_dir = data_dir.into();
         let journal_store = FileJournalStore::in_dir(&data_dir);
@@ -151,15 +184,23 @@ impl DaemonState {
             Err(err) => warn!(error = %err, "failed to load journal"),
         }
 
+        let filter_watch = FilterWatchdog::from_env();
+        info!(
+            heartbeat_ms = agents.heartbeat_interval_ms(),
+            filter_fail_threshold = filter_watch.fail_threshold(),
+            "agent registry + filter watchdog ready"
+        );
         let state = Arc::new(Self {
             orchestrator: Mutex::new(orchestrator),
             events,
-            agents: Mutex::new(AgentRegistry::new()),
+            agents: Mutex::new(agents),
+            filter_watch: Mutex::new(filter_watch),
             journal_store,
             config_store,
         });
         Self::spawn_hotplug_poller(Arc::clone(&state));
         Self::spawn_agent_watchdog(Arc::clone(&state));
+        Self::spawn_filter_watchdog(Arc::clone(&state));
         state
     }
 
@@ -168,7 +209,8 @@ impl DaemonState {
             return;
         };
         handle.spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(500));
+            // Fast tick so short IT timeouts (e.g. 200ms) are observed promptly.
+            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(100));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
@@ -178,6 +220,10 @@ impl DaemonState {
                 };
                 for seat_id in dead {
                     warn!(%seat_id, "session agent heartbeat timed out; fail-open");
+                    {
+                        let mut watch = state.filter_watch.lock().await;
+                        watch.disarm();
+                    }
                     let _ = state.events.send(DaemonEvent::AgentOffline {
                         seat_id,
                         reason: "heartbeat timeout".into(),
@@ -193,6 +239,69 @@ impl DaemonState {
                             let _ = state.sync_journal(&orch);
                             let _ = state.events.send(DaemonEvent::SeatStateChanged {
                                 seat_id: Some(seat_id),
+                                state: SeatState::Idle,
+                            });
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    fn spawn_filter_watchdog(state: Arc<Self>) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        handle.spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_millis(200));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let armed = {
+                    let watch = state.filter_watch.lock().await;
+                    watch.is_armed()
+                };
+                if !armed {
+                    continue;
+                }
+                let active = {
+                    let orch = state.orchestrator.lock().await;
+                    matches!(orch.state(), SeatState::Active | SeatState::Degraded { .. })
+                };
+                if !active {
+                    continue;
+                }
+
+                // Blocking IOCTL / soft ping off the async worker.
+                let health = tokio::task::spawn_blocking(ping_filter_health)
+                    .await
+                    .unwrap_or_else(|err| multiseat_platform_windows::InputFilterHealth {
+                        present: false,
+                        soft: false,
+                        abi_version: None,
+                        fail_open: 1,
+                        healthy: false,
+                        forced_fail_open: false,
+                        detail: format!("filter ping join error: {err}"),
+                    });
+
+                let action = {
+                    let mut watch = state.filter_watch.lock().await;
+                    watch.observe_health(&health)
+                };
+                if let FilterWatchAction::FailOpen { detail } = action {
+                    warn!(%detail, "input filter watchdog fail-open");
+                    let _ = state.events.send(DaemonEvent::EmergencyFailOpen {
+                        reason: format!("input filter: {detail}"),
+                    });
+                    let mut orch = state.orchestrator.lock().await;
+                    if matches!(orch.state(), SeatState::Active | SeatState::Degraded { .. }) {
+                        if let Err(err) = orch.stop() {
+                            warn!(error = %err, "fail-open stop after filter watchdog failed");
+                        } else {
+                            let _ = state.sync_journal(&orch);
+                            let _ = state.events.send(DaemonEvent::SeatStateChanged {
+                                seat_id: None,
                                 state: SeatState::Idle,
                             });
                         }
@@ -403,6 +512,10 @@ impl DaemonState {
             let mut agents = self.agents.lock().await;
             let _ = agents.remove(seat_id);
         }
+        {
+            let mut watch = self.filter_watch.lock().await;
+            watch.disarm();
+        }
         warn!(%seat_id, %reason, "session agent requested fail-open");
         let _ = self.events.send(DaemonEvent::AgentOffline {
             seat_id,
@@ -440,6 +553,11 @@ impl DaemonState {
                 if let Err(err) = self.sync_journal(&orch) {
                     warn!(error = %err, "failed to persist journal after start");
                 }
+                drop(orch);
+                {
+                    let mut watch = self.filter_watch.lock().await;
+                    watch.arm();
+                }
                 let _ = self.events.send(DaemonEvent::SeatStateChanged {
                     seat_id: None,
                     state: SeatState::Active,
@@ -463,6 +581,10 @@ impl DaemonState {
     }
 
     async fn stop(&self) -> ServerResponse {
+        {
+            let mut watch = self.filter_watch.lock().await;
+            watch.disarm();
+        }
         let mut orch = self.orchestrator.lock().await;
         match orch.stop() {
             Ok(()) => {
@@ -479,5 +601,44 @@ impl DaemonState {
                 message: err.to_string(),
             }),
         }
+    }
+}
+
+/// Builds an [`AgentRegistry`] from env overrides or defaults.
+fn agent_registry_from_env() -> AgentRegistry {
+    let timeout_ms = std::env::var(AGENT_TIMEOUT_ENV)
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok());
+    let heartbeat_ms = std::env::var(AGENT_HEARTBEAT_ENV)
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok());
+    match (heartbeat_ms, timeout_ms) {
+        (Some(hb), Some(to)) => {
+            info!(
+                heartbeat_ms = hb,
+                timeout_ms = to,
+                "agent timeouts from env"
+            );
+            AgentRegistry::with_timeouts(Duration::from_millis(hb), Duration::from_millis(to))
+        }
+        (None, Some(to)) => {
+            let hb = (to / 5).max(50);
+            info!(
+                heartbeat_ms = hb,
+                timeout_ms = to,
+                "agent timeout from env (heartbeat derived)"
+            );
+            AgentRegistry::with_timeouts(Duration::from_millis(hb), Duration::from_millis(to))
+        }
+        (Some(hb), None) => {
+            let to = hb.saturating_mul(5).max(hb + 100);
+            info!(
+                heartbeat_ms = hb,
+                timeout_ms = to,
+                "agent heartbeat from env (timeout derived)"
+            );
+            AgentRegistry::with_timeouts(Duration::from_millis(hb), Duration::from_millis(to))
+        }
+        (None, None) => AgentRegistry::new(),
     }
 }

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use iced::widget::{button, column, container, row, scrollable, text, Space};
+use iced::widget::{button, column, container, row, scrollable, stack, text, Space};
 use iced::window::{self, Mode};
 use iced::{Element, Length, Subscription, Task, Theme};
 use multiseat_core::{
@@ -16,6 +16,7 @@ use crate::assignment::{
     clear_seat_pointer, ensure_editable_seat, preview_validation, DragState,
 };
 use crate::config_choice::{config_for_action, ConfigSource};
+use crate::dnd::{self, DragPreview};
 use crate::ipc::{event_subscription, request_async};
 use crate::panels::{device_list, feasibility_list, seat_editor, validation_list};
 use crate::tray::{self, TrayCommand};
@@ -140,10 +141,7 @@ impl MultiseatApp {
             Message::TrayShowWindow(id) => {
                 self.main_window = Some(id);
                 self.window_hidden = false;
-                Task::batch([
-                    window::set_mode(id, Mode::Windowed),
-                    window::gain_focus(id),
-                ])
+                Task::batch([window::set_mode(id, Mode::Windowed), window::gain_focus(id)])
             }
             Message::Tray(TrayCommand::Exit) => iced::exit(),
             Message::Refresh | Message::TickRefresh => self.kick(ClientRequest::GetSnapshot),
@@ -169,14 +167,14 @@ impl MultiseatApp {
             Message::DragStarted(item) => {
                 self.drag = Some(DragState { item });
                 self.status = format!(
-                    "Picked {}; click a seat or Emergency",
+                    "Dragging {}; drop on a seat / Emergency, Esc cancels",
                     self.drag.as_ref().unwrap().item.label()
                 );
                 Task::none()
             }
             Message::CancelDrag => {
                 self.drag = None;
-                self.status = "Pick cancelled".into();
+                self.status = "Drag cancelled".into();
                 Task::none()
             }
             Message::DroppedOnSeat(seat_id) => {
@@ -361,9 +359,7 @@ impl MultiseatApp {
                 detail,
                 percent,
             } => {
-                let pct = percent
-                    .map(|p| format!(" {p}%"))
-                    .unwrap_or_default();
+                let pct = percent.map(|p| format!(" {p}%")).unwrap_or_default();
                 self.status = format!("Progress: {stage}{pct} — {detail}");
                 Task::none()
             }
@@ -384,10 +380,7 @@ impl MultiseatApp {
         self.window_hidden = false;
         self.status = "Window restored from tray".into();
         if let Some(id) = self.main_window {
-            return Task::batch([
-                window::set_mode(id, Mode::Windowed),
-                window::gain_focus(id),
-            ]);
+            return Task::batch([window::set_mode(id, Mode::Windowed), window::gain_focus(id)]);
         }
         window::latest().then(|id| match id {
             Some(id) => Task::done(Message::TrayShowWindow(id)),
@@ -417,7 +410,11 @@ impl MultiseatApp {
                     // Keep local layout; rewrite DeviceIds against live HW.
                     self.rematch_draft_to_hardware();
                 }
-                let dirty = if self.draft_dirty { " · draft dirty" } else { "" };
+                let dirty = if self.draft_dirty {
+                    " · draft dirty"
+                } else {
+                    ""
+                };
                 self.status = format!(
                     "Snapshot rev {} · {} inputs · {} displays · state={:?}{dirty}",
                     self.hardware.revision,
@@ -455,9 +452,8 @@ impl MultiseatApp {
                 heartbeat_interval_ms,
             } => {
                 self.connected = true;
-                self.status = format!(
-                    "Agent ack seat={seat_id} heartbeat={heartbeat_interval_ms}ms"
-                );
+                self.status =
+                    format!("Agent ack seat={seat_id} heartbeat={heartbeat_interval_ms}ms");
             }
             ServerResponse::Ok => {
                 self.connected = true;
@@ -509,19 +505,16 @@ impl MultiseatApp {
             button("Save draft").on_press_maybe((!self.busy).then_some(Message::SaveDraft)),
             button("Start").on_press_maybe((!self.busy).then_some(Message::Start)),
             button("Stop").on_press_maybe((!self.busy).then_some(Message::Stop)),
-            button("Ack emergency")
-                .on_press_maybe((!self.busy).then_some(Message::AckEmergency)),
-            button(hide_label).on_press_maybe(
-                self.tray_enabled
-                    .then_some(Message::ToggleHideToTray)
-            ),
+            button("Ack emergency").on_press_maybe((!self.busy).then_some(Message::AckEmergency)),
+            button(hide_label)
+                .on_press_maybe(self.tray_enabled.then_some(Message::ToggleHideToTray)),
             button("Exit").on_press(Message::ExitApp),
         ]
         .spacing(8);
 
-        let body = row![
+        let columns = row![
             column![
-                text("Hardware (pick)").size(20),
+                text("Hardware (drag source)").size(20),
                 scrollable(device_list(&self.hardware, self.drag.as_ref()))
             ]
             .spacing(8)
@@ -550,6 +543,18 @@ impl MultiseatApp {
         ]
         .spacing(16)
         .height(Length::Fill);
+
+        // Pointer-event DnD: transparent canvas layer over the dashboard draws
+        // the drag badge next to the cursor and cancels on Escape (план §8).
+        let drag_label = self
+            .drag
+            .as_ref()
+            .map(|d| d.item.label())
+            .unwrap_or_default();
+        let preview = dnd::overlay_canvas(DragPreview::new(drag_label, Message::CancelDrag));
+        let body = stack(vec![columns.into(), preview.into()])
+            .width(Length::Fill)
+            .height(Length::Fill);
 
         container(
             column![header, controls, Space::new().height(12), body]

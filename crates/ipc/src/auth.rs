@@ -53,9 +53,7 @@ impl ClientIdentity {
     pub fn may_mutate(&self) -> bool {
         match self.transport {
             TransportKind::TcpLoopback => !self.unverified,
-            TransportKind::NamedPipe => {
-                !self.unverified && (self.is_admin || self.is_local_system)
-            }
+            TransportKind::NamedPipe => !self.unverified && (self.is_admin || self.is_local_system),
         }
     }
 }
@@ -72,10 +70,7 @@ pub fn is_privileged_request(request: &ClientRequest) -> bool {
 }
 
 /// Enforces authorization before the daemon handler runs.
-pub fn authorize(
-    identity: &ClientIdentity,
-    request: &ClientRequest,
-) -> Result<(), ProtocolError> {
+pub fn authorize(identity: &ClientIdentity, request: &ClientRequest) -> Result<(), ProtocolError> {
     if !is_privileged_request(request) {
         return Ok(());
     }

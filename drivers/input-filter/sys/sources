@@ -1,0 +1,10 @@
+# WDK build placeholder — not wired to CI.
+TARGETNAME=RustMultiseatInputFilter
+TARGETTYPE=DRIVER
+KMDF_VERSION_MAJOR=1
+
+INCLUDES=..\include
+
+SOURCES=driver.c \
+        control.c \
+        class_filter.c

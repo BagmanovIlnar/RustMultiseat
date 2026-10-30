@@ -139,7 +139,10 @@ fn refine_child_port(
     }
 
     // Otherwise map by USB device address when CM exposed it as the address field.
-    if let Some(port) = child.port.and_then(|addr| by_addr.get(&(addr as u16)).copied()) {
+    if let Some(port) = child
+        .port
+        .and_then(|addr| by_addr.get(&(addr as u16)).copied())
+    {
         if let Some(info) = hub.ports.get(&port) {
             tracing::trace!(
                 old = ?child.port,
@@ -155,9 +158,7 @@ fn refine_child_port(
 unsafe fn device_id(devinst: u32) -> CoreResult<String> {
     let mut len = 0u32;
     if CM_Get_Device_ID_Size(&mut len, devinst, 0) != CR_SUCCESS || len == 0 {
-        return Err(CoreError::Backend(
-            "CM_Get_Device_ID_Size failed".into(),
-        ));
+        return Err(CoreError::Backend("CM_Get_Device_ID_Size failed".into()));
     }
     let mut buf = vec![0u16; len as usize];
     if CM_Get_Device_IDW(devinst, &mut buf, 0) != CR_SUCCESS {
@@ -207,8 +208,7 @@ unsafe fn registry_string(devinst: u32, prop: u32) -> Option<String> {
 unsafe fn registry_bytes(devinst: u32, prop: u32) -> Option<Vec<u8>> {
     let mut ty = 0u32;
     let mut len = 0u32;
-    let status =
-        CM_Get_DevNode_Registry_PropertyW(devinst, prop, Some(&mut ty), None, &mut len, 0);
+    let status = CM_Get_DevNode_Registry_PropertyW(devinst, prop, Some(&mut ty), None, &mut len, 0);
     if status != CR_SUCCESS || len == 0 {
         return None;
     }

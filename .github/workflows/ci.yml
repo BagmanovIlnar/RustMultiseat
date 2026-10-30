@@ -30,6 +30,24 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test
         run: cargo test --workspace
+      - name: mock E2E smoke
+        # Ephemeral TCP; covers daemon ↔ ctl validate/start/agent/stop without GUI.
+        shell: bash
+        run: bash scripts/mock_e2e_smoke.sh --with-agent
+      - name: Stage 0 lab checklist tooling
+        # Writes NO-GO artifact on CI hosts; real GO requires Windows lab hardware.
+        shell: bash
+        run: bash scripts/stage0_lab_checklist.sh
+      - name: Stage 7 install-plan matrix
+        shell: bash
+        run: |
+          cargo build -q -p multiseat-daemon --bin multiseat-ctl
+          CTL=target/debug/multiseat-ctl
+          test -x "$CTL" || CTL=target/debug/multiseat-ctl.exe
+          "$CTL" install-plan --pretend-version 10.0.22621 --out installer/artifacts/ci-win11
+          "$CTL" install-plan --pretend-version 6.1.7601 --out installer/artifacts/ci-win7
+          test -f installer/artifacts/ci-win11/install-plan.json
+          test -f installer/artifacts/ci-win7/INSTALL_PLAN.md
 
   # Windows 7/8.1 runners are not available on GitHub-hosted CI.
   # Stage 0/legacy coverage must use isolated self-hosted lab machines.

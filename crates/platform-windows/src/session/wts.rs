@@ -1,13 +1,12 @@
 //! Documented WTS session enumeration for Stage 0 evidence.
 
-use multiseat_core::{
-    DualSessionProbeResult, ObservedSession, SessionConnectState,
-};
+use multiseat_core::{DualSessionProbeResult, ObservedSession, SessionConnectState};
 use windows::core::PWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::RemoteDesktop::{
-    WTSEnumerateSessionsW, WTSFreeMemory, WTSGetActiveConsoleSessionId, WTS_CONNECTSTATE_CLASS,
-    WTS_CURRENT_SERVER_HANDLE, WTS_SESSION_INFOW, WTSActive, WTSConnected, WTSDisconnected,
+    WTSActive, WTSConnected, WTSDisconnected, WTSEnumerateSessionsW, WTSFreeMemory,
+    WTSGetActiveConsoleSessionId, WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SERVER_HANDLE,
+    WTS_SESSION_INFOW,
 };
 
 /// Runs the dual-session probe via `WTSEnumerateSessionsW`.
@@ -40,8 +39,8 @@ fn enumerate() -> Result<Vec<ObservedSession>, String> {
         let mut sessions = Vec::with_capacity(slice.len());
         for entry in slice {
             let station_name = pwstr_to_string(entry.pWinStationName);
-            let is_console = entry.SessionId == console_id
-                || station_name.eq_ignore_ascii_case("Console");
+            let is_console =
+                entry.SessionId == console_id || station_name.eq_ignore_ascii_case("Console");
             sessions.push(ObservedSession {
                 session_id: entry.SessionId,
                 station_name,

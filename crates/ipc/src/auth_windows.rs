@@ -3,7 +3,7 @@
 use std::io;
 
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, LocalFree, HLOCAL};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{
     CheckTokenMembership, CreateWellKnownSid, GetTokenInformation, RevertToSelf, TokenUser,
@@ -126,13 +126,7 @@ unsafe fn token_is_admin(token: HANDLE) -> bool {
         return false;
     }
     let mut is_member = false.into();
-    if CheckTokenMembership(
-        Some(token),
-        PSID(buf.as_mut_ptr().cast()),
-        &mut is_member,
-    )
-    .is_err()
-    {
+    if CheckTokenMembership(Some(token), PSID(buf.as_mut_ptr().cast()), &mut is_member).is_err() {
         return false;
     }
     is_member.as_bool()

@@ -284,17 +284,14 @@ fn dispatch_service() -> std::io::Result<()> {
 
 unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
     let name = to_wide(SERVICE_NAME);
-    let handle = match RegisterServiceCtrlHandlerExW(
-        PCWSTR(name.as_ptr()),
-        Some(service_ctrl),
-        None,
-    ) {
-        Ok(h) => h,
-        Err(err) => {
-            error!(error = %err, "RegisterServiceCtrlHandlerExW failed");
-            return;
-        }
-    };
+    let handle =
+        match RegisterServiceCtrlHandlerExW(PCWSTR(name.as_ptr()), Some(service_ctrl), None) {
+            Ok(h) => h,
+            Err(err) => {
+                error!(error = %err, "RegisterServiceCtrlHandlerExW failed");
+                return;
+            }
+        };
     let _ = STATUS_HANDLE_BITS.set(handle.0 as usize);
     report_status(SERVICE_START_PENDING, 3_000);
 
@@ -332,9 +329,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         report_status(SERVICE_STOP_PENDING, 5_000);
-        let _ = state
-            .handle(multiseat_core::ClientRequest::Stop)
-            .await;
+        let _ = state.handle(multiseat_core::ClientRequest::Stop).await;
         server.abort();
     });
 

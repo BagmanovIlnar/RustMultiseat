@@ -12,9 +12,7 @@ use tracing::{info, warn};
 mod scm;
 
 #[cfg(windows)]
-pub use scm::{
-    default_service_data_dir, ScmServiceHost, SERVICE_DISPLAY_NAME, SERVICE_NAME,
-};
+pub use scm::{default_service_data_dir, ScmServiceHost, SERVICE_DISPLAY_NAME, SERVICE_NAME};
 
 /// Named Pipe path advertised for local GUI/CLI clients (same as IPC default).
 pub const PIPE_NAME: &str = multiseat_ipc::WINDOWS_PIPE_NAME;

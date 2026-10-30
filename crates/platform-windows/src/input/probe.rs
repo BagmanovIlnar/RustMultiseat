@@ -8,6 +8,8 @@ pub const KEYBOARD_FILTER_SERVICE: &str = "RustMultiseatKbFilter";
 /// Expected mouse filter service name (future driver package).
 #[cfg_attr(not(windows), allow(dead_code))]
 pub const POINTER_FILTER_SERVICE: &str = "RustMultiseatMouFilter";
+/// Lab override: allow soft bookkeeping `apply` when filter presence is claimed (`1`).
+pub const INPUT_SOFT_APPLY_ENV: &str = "MULTISEAT_INPUT_SOFT_APPLY";
 
 /// Probes whether an input filter is installed and fail-open is the safe default.
 ///

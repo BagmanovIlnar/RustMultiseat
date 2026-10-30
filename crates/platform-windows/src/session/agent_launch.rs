@@ -76,18 +76,12 @@ pub fn resolve_daemon_addr(explicit: Option<&str>) -> Option<String> {
     if let Some(addr) = explicit.filter(|s| !s.is_empty()) {
         return Some(addr.to_string());
     }
-    env::var(DAEMON_ADDR_ENV)
-        .ok()
-        .filter(|s| !s.is_empty())
+    env::var(DAEMON_ADDR_ENV).ok().filter(|s| !s.is_empty())
 }
 
 /// Builds the argv for a session agent (without resolving the binary).
 pub fn agent_args(seat_id: SeatId, daemon_addr: Option<&str>) -> Vec<String> {
-    let mut args = vec![
-        "run".into(),
-        "--seat-id".into(),
-        seat_id.0.to_string(),
-    ];
+    let mut args = vec!["run".into(), "--seat-id".into(), seat_id.0.to_string()];
     if let Some(addr) = resolve_daemon_addr(daemon_addr) {
         args.push("--addr".into());
         args.push(addr);
@@ -150,19 +144,21 @@ pub fn require_agent() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes env mutation across parallel tests in this module.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn args_include_seat_and_optional_addr() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Clear env so this test is deterministic regardless of host.
         let prev = env::var_os(DAEMON_ADDR_ENV);
         env::remove_var(DAEMON_ADDR_ENV);
         let args = agent_args(SeatId(3), None);
         assert_eq!(args, vec!["run", "--seat-id", "3"]);
         let args = agent_args(SeatId(3), Some("127.0.0.1:9"));
-        assert_eq!(
-            args,
-            vec!["run", "--seat-id", "3", "--addr", "127.0.0.1:9"]
-        );
+        assert_eq!(args, vec!["run", "--seat-id", "3", "--addr", "127.0.0.1:9"]);
         match prev {
             Some(v) => env::set_var(DAEMON_ADDR_ENV, v),
             None => env::remove_var(DAEMON_ADDR_ENV),
@@ -171,6 +167,7 @@ mod tests {
 
     #[test]
     fn env_addr_fills_when_explicit_missing() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev = env::var_os(DAEMON_ADDR_ENV);
         env::set_var(DAEMON_ADDR_ENV, "127.0.0.1:4242");
         let args = agent_args(SeatId(1), None);
@@ -180,10 +177,7 @@ mod tests {
         );
         // Explicit wins over env.
         let args = agent_args(SeatId(1), Some("127.0.0.1:1"));
-        assert_eq!(
-            args,
-            vec!["run", "--seat-id", "1", "--addr", "127.0.0.1:1"]
-        );
+        assert_eq!(args, vec!["run", "--seat-id", "1", "--addr", "127.0.0.1:1"]);
         match prev {
             Some(v) => env::set_var(DAEMON_ADDR_ENV, v),
             None => env::remove_var(DAEMON_ADDR_ENV),

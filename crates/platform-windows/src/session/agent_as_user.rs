@@ -212,9 +212,7 @@ pub(crate) fn spawn_command_in_session(session_id: u32, cmdline: &str) -> CoreRe
 #[cfg(windows)]
 fn stop_windows(pid: u32) {
     use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{
-        OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-    };
+    use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 
     if pid == 0 {
         return;

@@ -8,15 +8,10 @@ use bytes::BytesMut;
 use iced::Subscription;
 use multiseat_core::{ClientRequest, DaemonEvent, ServerResponse, PROTOCOL_VERSION};
 use multiseat_daemon::DaemonClientSync;
-use multiseat_ipc::{
-    decode_frame, decode_payload, encode_frame, encode_payload, MessageKind,
-};
+use multiseat_ipc::{decode_frame, decode_payload, encode_frame, encode_payload, MessageKind};
 
 /// Runs one framed request on a background thread (Named Pipe / TCP).
-pub async fn request_async(
-    addr: String,
-    request: ClientRequest,
-) -> Result<ServerResponse, String> {
+pub async fn request_async(addr: String, request: ClientRequest) -> Result<ServerResponse, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let result = (|| {
@@ -70,10 +65,7 @@ fn event_stream(addr: &String) -> impl iced::futures::Stream<Item = DaemonEvent>
     })
 }
 
-fn event_worker(
-    addr: String,
-    tx: std::sync::mpsc::SyncSender<DaemonEvent>,
-) -> Result<(), String> {
+fn event_worker(addr: String, tx: std::sync::mpsc::SyncSender<DaemonEvent>) -> Result<(), String> {
     // Dedicated connection (not DaemonClientSync::request loop): after Subscribe
     // the server pushes MessageKind::Event frames on the same socket.
     let mut stream = open_tcp_or_pipe(&addr)?;

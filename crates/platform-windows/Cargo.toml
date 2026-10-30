@@ -8,6 +8,7 @@ description = "Windows platform adapters and cross-platform mock backends"
 
 [dependencies]
 multiseat-core = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
